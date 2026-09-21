@@ -1,3 +1,5 @@
+import '../library/local_music_library.dart';
+
 import 'package:flutter/material.dart';
 import 'package:on_audio_query_pluse/on_audio_query.dart';
 
@@ -9,17 +11,20 @@ import '../widgets/local_song_list.dart';
 import 'local_music_folder_screen.dart';
 
 class LocalMusicScreen extends StatefulWidget {
-  const LocalMusicScreen({super.key, required this.controller});
+  const LocalMusicScreen({
+    super.key,
+    required this.controller,
+    required this.library,
+  });
 
   final PlaybackController controller;
+  final LocalMusicLibrary library;
 
   @override
   State<LocalMusicScreen> createState() => _LocalMusicScreenState();
 }
 
 class _LocalMusicScreenState extends State<LocalMusicScreen> {
-  final OnAudioQuery _audioQuery = OnAudioQuery();
-
   List<SongModel> _songs = [];
   List<LocalMusicFolder> _folders = [];
   bool _showFolders = false;
@@ -33,7 +38,9 @@ class _LocalMusicScreenState extends State<LocalMusicScreen> {
   @override
   void initState() {
     super.initState();
-    _loadSongs();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _loadSongs();
+    });
   }
 
   Future<void> _playSong(SongModel song, List<SongModel> queue) async {
@@ -67,27 +74,20 @@ class _LocalMusicScreenState extends State<LocalMusicScreen> {
     });
 
     try {
-      var hasPermission = await _audioQuery.permissionsStatus();
-
-      if (!hasPermission) {
-        hasPermission = await _audioQuery.permissionsRequest();
-      }
-
-      if (!hasPermission) {
-        if (mounted) {
-          setState(() {
-            _isLoading = false;
-            _permissionDenied = !isRetry;
-            _permissionUnavailable = isRetry;
-          });
-        }
+      await widget.library.load(retry: isRetry);
+      if (!mounted) return;
+      if (widget.library.status == LibraryStatus.denied) {
+        setState(() {
+          _isLoading = false;
+          _permissionDenied = !isRetry;
+          _permissionUnavailable = isRetry;
+        });
         return;
       }
-
-      final songs = await _audioQuery.querySongs(
-        sortType: SongSortType.TITLE,
-        orderType: OrderType.ASC_OR_SMALLER,
-      );
+      if (widget.library.status == LibraryStatus.failed) {
+        throw StateError('Library query failed');
+      }
+      final songs = widget.library.songs;
       final folders = LocalMusicFolder.groupSongs(songs);
 
       if (mounted) {

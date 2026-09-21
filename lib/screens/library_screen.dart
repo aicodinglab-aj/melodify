@@ -1,3 +1,5 @@
+import '../library/local_music_library.dart';
+
 import 'package:flutter/material.dart';
 
 import '../playback/playback_controller.dart';
@@ -13,10 +15,12 @@ class LibraryScreen extends StatelessWidget {
   const LibraryScreen({
     super.key,
     required this.controller,
+    required this.library,
     required this.themeController,
   });
 
   final PlaybackController controller;
+  final LocalMusicLibrary library;
   final MelodifyThemeController themeController;
 
   @override
@@ -118,8 +122,10 @@ class LibraryScreen extends StatelessWidget {
                 onTap: () {
                   Navigator.of(context).push(
                     MaterialPageRoute<void>(
-                      builder: (context) =>
-                          LocalMusicScreen(controller: controller),
+                      builder: (context) => LocalMusicScreen(
+                        controller: controller,
+                        library: library,
+                      ),
                     ),
                   );
                 },

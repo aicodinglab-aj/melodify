@@ -1,3 +1,5 @@
+import 'library/local_music_library.dart';
+
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 
@@ -63,15 +65,17 @@ class _MainScreenState extends State<MainScreen> {
   int currentIndex = 0;
   final AudioPlayer _audioPlayer = AudioPlayer();
   late final PlaybackController _controller = PlaybackController(_audioPlayer);
+  final _library = LocalMusicLibrary();
   final _libraryNavigatorKey = GlobalKey<NavigatorState>();
 
   late final List<Widget> pages = [
     HomeScreen(controller: _controller),
-    const SearchScreen(),
+    SearchScreen(controller: _controller, library: _library),
     Navigator(
       key: _libraryNavigatorKey,
       onGenerateRoute: (_) => MaterialPageRoute<void>(
         builder: (_) => LibraryScreen(
+          library: _library,
           controller: _controller,
           themeController: widget.themeController,
         ),
@@ -210,6 +214,7 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   void dispose() {
+    _library.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -231,6 +236,7 @@ class _MainScreenState extends State<MainScreen> {
             NavigationBar(
               selectedIndex: currentIndex,
               onDestinationSelected: (index) {
+                if (index == 1) _library.load();
                 setState(() {
                   currentIndex = index;
                 });

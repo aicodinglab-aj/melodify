@@ -14,6 +14,7 @@ class LocalSongList extends StatelessWidget {
     required this.loadingSongId,
     required this.onPlaySong,
     this.storageKey = 'local-songs',
+    this.showAlbum = false,
   });
 
   final List<SongModel> songs;
@@ -21,6 +22,7 @@ class LocalSongList extends StatelessWidget {
   final int? loadingSongId;
   final Future<void> Function(SongModel) onPlaySong;
   final String storageKey;
+  final bool showAlbum;
 
   String _formatDuration(int milliseconds) {
     final duration = Duration(milliseconds: milliseconds);
@@ -48,6 +50,20 @@ class LocalSongList extends StatelessWidget {
           itemBuilder: (context, index) {
             final song = songs[index];
             final artist = song.artist?.trim();
+            final album = song.album?.trim();
+            final artistLabel =
+                artist == null ||
+                    artist.isEmpty ||
+                    artist.toLowerCase() == '<unknown>'
+                ? 'Local Music'
+                : artist;
+            final subtitle =
+                showAlbum &&
+                    album != null &&
+                    album.isNotEmpty &&
+                    album.toLowerCase() != '<unknown>'
+                ? '$artistLabel / $album'
+                : artistLabel;
             // Read the existing source; selection never changes player state.
             final isCurrent =
                 sourceUri != null &&
@@ -76,9 +92,7 @@ class LocalSongList extends StatelessWidget {
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   subtitle: Text(
-                    artist == null || artist.isEmpty || artist == '<unknown>'
-                        ? 'Local Music'
-                        : artist,
+                    subtitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodyMedium,
