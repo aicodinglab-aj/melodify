@@ -5,20 +5,39 @@ import 'package:just_audio/just_audio.dart';
 import 'package:on_audio_query_pluse/on_audio_query.dart';
 
 import 'playback_queue.dart';
+import '../library/playback_history.dart';
 
 class PlaybackController extends ChangeNotifier {
-  PlaybackController(this.player) {
+  PlaybackController(this.player, {this.history}) {
     _stateSubscription = player.playerStateStream.listen((state) {
+      if (state.playing && state.processingState == ProcessingState.ready) {
+        final song = _pendingHistory;
+        if (song != null && identical(song, currentSong)) {
+          _pendingHistory = null;
+          if (history != null) unawaited(history!.record(song));
+        }
+      }
       if (state.processingState == ProcessingState.completed &&
           !_handlingCompletion &&
           queue.current != null) {
         _handlingCompletion = true;
-        unawaited(_complete().whenComplete(() => _handlingCompletion = false));
+        unawaited(
+          _complete()
+              .catchError((Object error) {
+                _reportPlaybackError();
+              })
+              .whenComplete(() => _handlingCompletion = false),
+        );
       }
     });
   }
 
   final AudioPlayer player;
+  final PlaybackHistory? history;
+  SongModel? _loadedSong;
+  SongModel? _pendingHistory;
+  String? playbackError;
+  bool _disposed = false;
   final PlaybackQueue<SongModel> queue = PlaybackQueue<SongModel>();
   late final StreamSubscription<PlayerState> _stateSubscription;
   bool _handlingCompletion = false;
@@ -47,6 +66,9 @@ class PlaybackController extends ChangeNotifier {
     final song = currentSong;
     if (song == null) return;
     final generation = ++_generation;
+    _loadedSong = null;
+    _pendingHistory = null;
+    playbackError = null;
     await player.stop();
     try {
       if (song.data.trim().isEmpty) throw StateError('No file path');
@@ -56,7 +78,37 @@ class PlaybackController extends ChangeNotifier {
       if (uri == null || uri.isEmpty) rethrow;
       await player.setUrl(uri);
     }
-    if (generation == _generation) unawaited(player.play());
+    if (generation == _generation) {
+      _loadedSong = song;
+      _startPlayback();
+    }
+  }
+
+  void _startPlayback() {
+    _pendingHistory = _loadedSong;
+    final generation = _generation;
+    unawaited(
+      player.play().catchError((Object error) {
+        if (_disposed || generation != _generation) return;
+        _reportPlaybackError();
+      }),
+    );
+  }
+
+  void _reportPlaybackError() {
+    if (_disposed) return;
+    _pendingHistory = null;
+    playbackError =
+        'This song could not be played. It may no longer be available.';
+    notifyListeners();
+  }
+
+  Future<void> _loadForTransport() async {
+    try {
+      await _loadCurrent();
+    } catch (_) {
+      _reportPlaybackError();
+    }
   }
 
   Future<void> togglePlayback() async {
@@ -66,14 +118,14 @@ class PlaybackController extends ChangeNotifier {
       if (player.processingState == ProcessingState.completed) {
         await player.seek(Duration.zero);
       }
-      unawaited(player.play());
+      _startPlayback();
     }
   }
 
   Future<void> next() async {
     if (queue.next() != null) {
       notifyListeners();
-      await _loadCurrent();
+      await _loadForTransport();
     }
   }
 
@@ -85,7 +137,7 @@ class PlaybackController extends ChangeNotifier {
     }
     queue.previous();
     notifyListeners();
-    await _loadCurrent();
+    await _loadForTransport();
   }
 
   Future<void> _complete() async {
@@ -94,7 +146,7 @@ class PlaybackController extends ChangeNotifier {
       await player.stop();
     } else if (mode == PlaybackMode.repeatOne) {
       await player.seek(Duration.zero);
-      unawaited(player.play());
+      _startPlayback();
     } else {
       notifyListeners();
       await _loadCurrent();
@@ -119,6 +171,9 @@ class PlaybackController extends ChangeNotifier {
 
   Future<void> close() async {
     ++_generation;
+    _loadedSong = null;
+    _pendingHistory = null;
+    playbackError = null;
     await player.stop();
     queue.clear();
     notifyListeners();
@@ -126,6 +181,7 @@ class PlaybackController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _stateSubscription.cancel();
     player.dispose();
     super.dispose();

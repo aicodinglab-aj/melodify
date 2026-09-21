@@ -96,3 +96,17 @@ List<SongModel> searchLocalSongs(List<SongModel> songs, String query) {
   });
   return matches.map((match) => match.song).toList(growable: false);
 }
+
+/// MediaStore date_added order; unknown dates are omitted rather than invented.
+List<SongModel> recentlyAddedSongs(List<SongModel> songs, {int count = 10}) {
+  final dated = songs.where((song) => (song.dateAdded ?? 0) > 0).toList();
+  dated.sort((a, b) {
+    final byDate = b.dateAdded!.compareTo(a.dateAdded!);
+    if (byDate != 0) return byDate;
+    final byTitle = a.title.toLowerCase().compareTo(b.title.toLowerCase());
+    if (byTitle != 0) return byTitle;
+    final byId = a.id.compareTo(b.id);
+    return byId != 0 ? byId : a.data.compareTo(b.data);
+  });
+  return dated.take(count).toList(growable: false);
+}

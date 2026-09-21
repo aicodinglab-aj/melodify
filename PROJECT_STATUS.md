@@ -39,7 +39,7 @@ entries. Record verification dates and distinguish source inspection from runtim
 | UI/state | Material 3; `StatefulWidget`, `ChangeNotifier`, `ListenableBuilder`, `StreamBuilder` |
 | Playback | `just_audio`; application-managed queue |
 | Local discovery | `on_audio_query_pluse` / `OnAudioQuery` |
-| Persistence | `shared_preferences`, currently theme choice only |
+| Persistence | `shared_preferences`, theme choice and capped playback history |
 | Tests/lints | `flutter_test`, `flutter_lints`; no integration-test suite |
 | Android build | Gradle Kotlin DSL, AGP `9.1.0`, Gradle `9.3.1`, Java/JVM target 17 |
 
@@ -50,16 +50,17 @@ tool versions and SDK-derived Android defaults describe this review environment.
 
 | Path | Responsibility |
 | --- | --- |
-| `lib/main.dart` | App/theme lifecycle, shared audio player/controller, tab shell, nested Library navigator, mini-player |
-| `lib/playback/playback_controller.dart` | Song selection, source loading, playback commands, completion handling, player disposal |
+| `lib/main.dart` | App/theme lifecycle, shared audio player/controller, tab shell, independent Home/Library navigators, mini-player |
+| `lib/playback/playback_controller.dart` | Shared playback, completion, successful-start history hook, error state and disposal |
 | `lib/playback/playback_queue.dart` | Backend-independent generic queue, mode and shuffle history |
 | `lib/library/local_music_library.dart` | Shared session collection, permission/query lifecycle, in-memory search helper |
+| `lib/library/playback_history.dart` | History controller/store interface, SharedPreferences adapter and identifier resolution |
 | `lib/models/local_music_folder.dart` | Immutable folder membership, path normalization, grouping/sorting |
 | `lib/screens/` | Home, Search, Library, Local Music, Folder, Now Playing, Settings, Themes, About |
 | `lib/widgets/local_song_list.dart` | Shared song rows; reads player state and delegates selection |
 | `lib/widgets/music_artwork.dart` | Decorative icon/gradient artwork; not extracted album art |
 | `lib/theme/` | Base colors, theme IDs/palettes/Material styling, preferences controller |
-| `test/` | Seven Dart unit/widget test files |
+| `test/` | Nine Dart unit/widget test files |
 | `assets/` | Launcher source image and bundled `audio/test_song.mp3` |
 | `android/` | Android manifest, Kotlin activity, resources and Gradle configuration |
 | `ios/`, `macos/`, `linux/`, `windows/`, `web/` | Other platform runners and packaging scaffolding; unverified as music-player targets |
@@ -67,15 +68,19 @@ tool versions and SDK-derived Android defaults describe this review environment.
 | `analysis_options.yaml` | Flutter lints; excludes build and platform directories |
 
 The app injects controllers through constructors rather than a provider/container.
-`MainScreen` owns a shared `LocalMusicLibrary`, injected into Search and through
-Library into Local Music. It caches an immutable title-ordered song list, coalesces
+`MainScreen` owns a shared `LocalMusicLibrary` and `PlaybackHistory`. Home, Search
+and Local Music reuse the library; Home and PlaybackController share the history.
+The history store interface separates persistence from Home UI for later migration.
+LocalMusicLibrary caches an immutable title-ordered song list, coalesces
 concurrent loads, and exposes loading/ready/denied/failed state. Local Music derives
-its folders from that collection. Loading starts on Search tab selection or after
-Local Music's first frame, not on application startup. Successful loads (including
-empty libraries) are reused for the session; retry reruns permission/query logic. Selection calls
+its folders from that collection. Home starts library loading/history restoration
+after its first frame; Search selection and Local Music reuse the same load/cache.
+Successful loads (including empty libraries) are reused for the session; retry
+reruns permission/query logic. Selection calls
 `PlaybackController.selectSong`; controller notifications update song/mode UI,
 while player streams update position, duration and play/pause UI. There is no
-database, persistent queue, favorites store, or history store.
+database, persistent queue or favorites store; a small identifier-only listening
+history is persisted in SharedPreferences.
 The bundled test MP3 has no playback entry point in `lib/`.
 
 ## 4. Playback Architecture
@@ -89,7 +94,9 @@ The controller owns disposal of the player and its player-state subscription.
   Selection locates the song by ID. Songs view supplies all discovered songs;
   Folder view supplies only that folder's ordered songs. Search supplies a snapshot
   of the current matching results in displayed relevance order; later query edits do not
-  modify that playback queue or interrupt playback.
+  modify that playback queue or interrupt playback. Home snapshots its displayed
+  Recently Played or Recently Added subset (up to 10 songs) into the same queue;
+  subsequent history reordering does not change that queue.
 - Loading stops the player, attempts `setFilePath(song.data)`, then falls back
   to `setUrl(song.uri)` if file loading fails. A generation counter gates the final
   play call after asynchronous loading; it does not serialize every load operation.
@@ -107,6 +114,11 @@ The controller owns disposal of the player and its player-state subscription.
 - Previous restarts the current track if position is **greater than three seconds**;
   otherwise it uses queue previous (first song remains first unless repeat-all wraps).
 - A `ProcessingState.completed` listener advances/repeats/stops with a reentrancy guard.
+- PlaybackController arms a history candidate after source loading and records once
+  the shared player reports both `playing` and `ProcessingState.ready`. Failed
+  loading or play attempts before that state are not recorded. This hook covers
+  all entry points, next/previous, automatic completion and repeat/resume without
+  changing PlaybackQueue mode semantics.
 - Play/pause uses the shared player; replay from completed state seeks to zero.
   Close stops playback, clears the queue and hides the mini-player.
 - The mini-player includes title, artist fallback, play/pause, close, seek slider,
@@ -152,13 +164,15 @@ mechanism (MediaStore audio queries in resolved `on_audio_query_plus_android`
 ## 6. Navigation and Screens
 
 `MainScreen` retains Home/Search/Library with an `IndexedStack`. Library has a
-nested `Navigator` and `NavigatorPopHandler`, so its child routes retain the shell
-and mini-player. Now Playing is pushed from the shell onto the root navigator.
+nested `Navigator`; Home now has its own independent nested `Navigator`. Each
+is wrapped by a `NavigatorPopHandler` with an active-tab callback guard. AppBar
+Back pops the nearest stack; system Back pops only the active tab stack. Both
+retain the shell and mini-player, including when switching tabs mid-navigation. Now Playing is pushed from the shell onto the root navigator.
 
 | Screen | Status | Working behavior and limitations |
 | --- | --- | --- |
-| Main shell | IMPLEMENTED | Three tabs, retained pages, nested Library navigation, conditional mini-player |
-| Home | PARTIAL | Shared current-song play/pause; static greeting, Recently Played cards and three dummy song rows |
+| Main shell | IMPLEMENTED | Three tabs, retained pages, independent Home/Library route stacks, conditional mini-player |
+| Home | IMPLEMENTED (V1) | Quick Access, persistent Recently Played, MediaStore Recently Added, shared play/pause and library/error states |
 | Search | IMPLEMENTED | Relevance-ranked title/artist/album substring search, trimmed case-insensitive queries, shared library/error states and result-queue playback |
 | Library | PARTIAL | Opens Local Music and Settings; chips, Liked Songs and Recently Played are presentation-only |
 | Local Music | IMPLEMENTED | Permissions, discovery, Songs/Folders and queue selection; limitations in section 5 |
@@ -182,7 +196,35 @@ song; unmatched queries show **No songs found**. Loading, denied permission with
 retry/settings instructions, query failure/retry, and empty library have separate
 states. Results reuse `LocalSongList` with optional album text, existing fallback
 artwork and the current theme. Taps are guarded during loading and playback errors
-show a snackbar. `PlaybackController` and `PlaybackQueue` remain unchanged.
+show a snackbar. Search still uses the shared PlaybackController/PlaybackQueue.
+
+### Home V1 and listening history
+
+- Quick Access stays on Home and pushes the existing Local Music screen onto
+  Home's nested navigator. Back returns to Home; Library-origin navigation keeps
+  its separate stack and returns to its own previous route. Local Music/Songs opens Songs; Folders
+  sets `initialShowFolders`. The shell and mini-player stay present.
+- Recently Played shows up to 10 available songs, newest play first, from a history
+  capped at **50 unique identifiers**. Replays move an existing item to the front.
+- `PlaybackHistoryStore` abstracts read/write operations. The default adapter uses
+  the existing SharedPreferences dependency and key `melodify_recently_played_v1`.
+  It stores a string list: `path:` plus the local path, otherwise `uri:`, otherwise
+  `id:` plus the MediaStore ID. No audio or duplicated song metadata is stored.
+- Restoration runs once; recording waits for restoration and serializes writes.
+  Storage failures preserve session history and display a Home notice. History is
+  resolved against current shared-library metadata; unavailable identifiers are
+  hidden without deleting them (for example, temporarily unmounted storage).
+- Recently Added uses the package's verified `SongModel.dateAdded` / `date_added`
+  MediaStore field, descending. Ties use case-insensitive title, ID and path.
+  Null, zero or negative dates are omitted; no dates are invented. Up to 10 songs
+  appear, with an explanatory empty state when no valid dates exist.
+- Home uses theme-aware horizontal song cards with existing fallback artwork. It
+  listens to library, history and controller changes, not position ticks. One
+  shared discovery load feeds both sections; there is no scanning or polling.
+- Empty-library, permission denial, query failure/retry and empty-history states
+  are explicit. A stale cached file that fails when tapped produces a snackbar.
+  Failed transport loads and asynchronous play errors are caught; Home displays
+  the controller error. A failed queue item is retained rather than auto-skipped.
 
 ## 7. Theme System
 
@@ -260,7 +302,7 @@ are distinguished in the purpose column where useful.
 | `cupertino_icons` | `^1.0.8` | Declared icon package; no CupertinoIcons usage in current app; locked `1.0.9` |
 | `just_audio` | `^0.10.6` | Shared audio backend; locked `0.10.6` |
 | `on_audio_query_pluse` | `^3.0.7` | Song models, device query and permissions; locked `3.0.7` |
-| `shared_preferences` | `^2.5.3` | Theme preference; locked `2.5.5` |
+| `shared_preferences` | `^2.5.3` | Theme preference and Recently Played identifiers; locked `2.5.5` |
 
 ### Development dependencies
 
@@ -283,12 +325,15 @@ package is directly declared. `pubspec.lock` records transitive dependencies.
 | `test/melodify_theme_controller_test.dart` | 4 tests: default/invalid ID, persistence/restore, palette/AMOLED/light properties, all selections |
 | `test/settings_screen_test.dart` | 2 widget tests: theme navigation/application; About identity/version/license entry |
 | `test/local_music_search_test.dart` | 17 tests: nine relevance ranks, alphabetical/deterministic ties, case-insensitive ranking, ranked display/queue/index integration, title/artist/album, case/whitespace, empty/unknown metadata, coalesced cached discovery, result queue/index/source loading, query-edit isolation, next/previous, library states/retry and shared Local Music loading |
+| `test/home_v1_test.dart` | 24 tests: history order/dedup/cap/persistence/storage failures, restoration ordering, missing songs, added-date sorting, successful-start recording, deleted-file/manual/automatic transport handling, repeat/resume, both Home queues/indices, shortcuts, library error states and all six themes |
+| `test/navigation_test.dart` | 8 full-shell widget tests: all three Home shortcuts return Home via AppBar/system Back, independent Library/Home folder stacks, shared player identity, queue retention and mini-player presence |
 | `test/widget_test.dart` | 1 widget test: About opens Flutter LicensePage; not a full app smoke test |
 
-Latest `flutter test` result: **PASS — all 35 tests passed**, exit code 0 (2026-09-21).
-Search tests use the real PlaybackController/PlaybackQueue with fake audio/query
-backends. Native playback/permission dialogs, full-shell device integration and
-background lifecycle are not covered; controller failure/race paths remain untested. iOS/macOS `RunnerTests` contain template empty
+Latest `flutter test` result: **PASS — all 67 tests passed**, exit code 0 (2026-09-21).
+Search and Home tests use the real PlaybackController/PlaybackQueue with fake
+audio/query backends; SharedPreferences persistence is tested with its mock store. Full-shell Back routing is tested with mocked platform channels. Native playback/permission dialogs, device integration and
+background lifecycle are not covered. Source/play errors and completion are tested;
+rapid overlapping controller load races remain untested. iOS/macOS `RunnerTests` contain template empty
 example tests; they are not music feature coverage and were not run.
 
 ## 12. Static Analysis
@@ -297,9 +342,9 @@ Latest `flutter analyze` result: **PASS — No issues found**, exit code 0 (2026
 No analyzer errors, warnings or informational issues were reported.
 `analysis_options.yaml` includes Flutter lints and excludes `build/**` plus all
 platform directories. Analysis success does not validate native Android builds.
-Requested `dart format lib test` result: **26 files formatted, 0 changed on final run**, exit
+Requested `dart format lib test` result: **29 files formatted**, exit
 code 0 (2026-09-21). SDK commands required execution outside the restricted sandbox;
-the completed checks above used that access. Search implementation and tests changed
+the completed checks above used that access. Home/history implementation and tests changed
 in this update; existing tests were preserved.
 
 ## 13. Build Status
@@ -332,20 +377,22 @@ were not verified in this update.
 - [x] Settings, About, bundled version and license navigation.
 - [x] Android launcher icon configuration/resources.
 - [x] Relevance-ranked local Search by title, artist and album with ranked result queues.
-- [ ] Real recently played data.
+- [x] Home Quick Access using existing Songs/Folders navigation.
+- [x] Persistent Recently Played (50 unique identifiers; Home shows 10).
+- [x] Recently Added from shared MediaStore added-date metadata (up to 10).
 - [ ] Favorites/playlists and persistent library/playback state.
 - [ ] Background audio service, media notification and lock-screen controls.
 - [ ] Real embedded album artwork.
 
 ## 15. Pending / Planned Features
 
-**PARTIALLY IMPLEMENTED:** Home has a real shared transport control but mock music
-content. Library has working Local Music/Settings links but inactive favorites,
-history and playlist affordances. Artwork is
+**PARTIALLY IMPLEMENTED:** Library has working Local Music/Settings links but
+inactive favorites, history and playlist affordances; real history is currently
+available on Home. Artwork is
 decorative rather than metadata-driven.
 
 **PLANNED / recommended backlog, not implemented or committed to a schedule:**
-Listening history/Home data, favorites, playlists, library refresh,
+Library history navigation, favorites, playlists, library refresh,
 embedded artwork, queue restoration, background service/media controls and release
 packaging. These are recommendations based on gaps; no separate roadmap was found.
 
@@ -355,19 +402,29 @@ Source-confirmed limitations (not claims of reproduced device failures):
 
 - Player load errors from local selection get a snackbar, but queue/current-song
   state is updated before loading succeeds and is not rolled back on failure.
-  Next/previous/completion paths lack equivalent UI error handling; `play()` futures
-  are unawaited without application error handling.
+  Next/previous/completion load errors and `play()` errors are caught and exposed
+  through controller error state on Home; other screens do not yet share that error
+  presentation. Failed queue items are not automatically skipped.
 - The generation guard gates playback but does not cancel/serialize source loading.
-  Transport actions can overlap pending operations; controller race/error behavior
+  Transport actions can overlap pending operations; rapid-load race behavior
   lacks tests. `close()` stops rather than unloads the source, while row selection
   derives from that source, so a row can remain highlighted after queue clearing.
 - Shuffle and repeat cannot be combined. Shuffle history can grow throughout a
   session and does not guarantee every song plays before repetition.
-- Library data and queue/history are memory-only. The shared discovery cache has
+- Library data and the playback queue are memory-only; listening history persists. The shared discovery cache has
   no live refresh or permission-revocation observer. Newly added songs require a
   fresh session (or a retry path); Search uses simple substring matching, without
   fuzzy/accent-insensitive matching;
   background/lock-screen reliability is not implemented or verified.
+- Recently Added depends on MediaStore added-date availability/accuracy and the
+  session collection. Undated songs remain available in Songs/Search but are omitted
+  from Recently Added. This is a library insertion date, not a release date.
+- History resolution depends on the current library; moved/renamed files may lose
+  their association, and replacement files at the same path may inherit it. Missing
+  items remain stored within the 50-entry cap but are hidden. There is no history
+  clearing UI or database. Storage failures may lose persistence across restarts.
+- A ready/playing backend state is the history success signal; device-level audio
+  output and process termination during a preferences write were not verified.
 - About reads bundled version text rather than installed build metadata.
 - Android still uses the example application ID and debug release signing.
   Kotlin incremental compilation is disabled; the reason is not recorded.
@@ -378,7 +435,8 @@ Source-confirmed limitations (not claims of reproduced device failures):
   The test MP3 remains bundled without a current playback caller.
 
 Check results and any environment limitations are recorded in sections 11–13.
-No unrelated playback/queue behavior or dependencies were changed for Search.
+Home V1 retains a single shared player and existing queue modes; no dependencies
+or native platform configuration were changed.
 
 ## 17. Important Development Rules
 
@@ -455,18 +513,62 @@ No unrelated playback/queue behavior or dependencies were changed for Search.
 **Removed**
 - Nothing. Shared library and playback architecture remain intact.
 
+### 2026-09-21 - Home Screen V1 with real local data
+
+**Added**
+- Home Quick Access, up to 10 Recently Played and 10 Recently Added songs.
+- A 50-entry deduplicated persistent history with a replaceable store interface,
+  serialized SharedPreferences writes and current-library identifier resolution.
+- Successful ready/playing history hooks for shared playback, plus safe handling
+  of stale/deleted files and asynchronous play errors.
+- 24 tests covering history/storage, metadata sorting, Home queues, navigation
+  callbacks, failure states and all six themes; full suite: 59 passing tests.
+
+**Changed**
+- Home loads/reuses the shared library after its first frame and observes history
+  updates. Quick Access uses the existing Library navigator and Local Music views.
+- Recently Added sorts verified positive MediaStore date_added values newest first;
+  unavailable dates are omitted. Selected Home collections become queue snapshots.
+- Flutter analysis is clean; formatting completed. No APK build or clean performed.
+
+**Fixed**
+- Home no longer presents fictional music/history; failed loads do not create history.
+
+**Removed**
+- Home demo song rows and placeholder recently played cards. No dependencies removed.
+
+### 2026-09-21 - Preserve Home Quick Access entry point
+
+**Added**
+- Eight full-shell navigation tests covering three Home shortcuts, Library folder
+  routes, independent retained stacks, and AppBar plus simulated system Back.
+
+**Changed**
+- Home owns a nested navigator under the existing shared playback shell. Quick
+  Access pushes existing Local Music views there without switching tabs.
+- System Back callbacks guard the active tab so inactive stacks cannot be popped.
+- Validation: 67 tests pass; formatting completed; Flutter analysis clean.
+
+**Fixed**
+- Back from Home Quick Access returns Home instead of Library. Library-origin
+  routes continue returning through their own stack; player ownership is unchanged.
+
+**Removed**
+- Nothing. Previous changelog entries are preserved.
+
 ## 19. Next Recommended Work
 
-1. Add PlaybackController tests for load failure, completion, rapid transport/close
-   interactions and the three-second previous boundary; then address confirmed failures.
+1. Add PlaybackController tests for rapid transport/close interactions and the
+   three-second previous boundary; then address confirmed failures.
 2. Verify discovery, permissions and playback on Android devices, including URI
    fallback and navigation; record device/API-specific results.
 3. Add explicit library refresh and validate permission changes against the session cache.
-4. Add persistent listening history and replace Home/Library dummy recently played content.
+4. Connect Library's inactive Recently Played entry to the existing history and
+   consider history management controls.
 5. Implement favorites/playlists with deliberate storage and queue semantics.
 6. Add background playback and Android media notification/lock-screen controls
    while preserving shared-player ownership; test lifecycle behavior explicitly.
 7. Add library refresh and embedded artwork; prepare production identity/signing
    and verify a fresh release build when release work is requested.
 
-These remaining recommendations were not implemented during the Search update.
+These remaining recommendations were not implemented during the Home V1 update.

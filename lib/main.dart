@@ -1,4 +1,6 @@
 import 'library/local_music_library.dart';
+import 'library/playback_history.dart';
+import 'screens/local_music_screen.dart';
 
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
@@ -64,12 +66,27 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int currentIndex = 0;
   final AudioPlayer _audioPlayer = AudioPlayer();
-  late final PlaybackController _controller = PlaybackController(_audioPlayer);
+  final _history = PlaybackHistory();
+  late final PlaybackController _controller = PlaybackController(
+    _audioPlayer,
+    history: _history,
+  );
   final _library = LocalMusicLibrary();
+  final _homeNavigatorKey = GlobalKey<NavigatorState>();
   final _libraryNavigatorKey = GlobalKey<NavigatorState>();
 
   late final List<Widget> pages = [
-    HomeScreen(controller: _controller),
+    Navigator(
+      key: _homeNavigatorKey,
+      onGenerateRoute: (_) => MaterialPageRoute<void>(
+        builder: (_) => HomeScreen(
+          controller: _controller,
+          library: _library,
+          history: _history,
+          onOpenLocalMusic: _openLocalMusic,
+        ),
+      ),
+    ),
     SearchScreen(controller: _controller, library: _library),
     Navigator(
       key: _libraryNavigatorKey,
@@ -82,6 +99,18 @@ class _MainScreenState extends State<MainScreen> {
       ),
     ),
   ];
+
+  void _openLocalMusic(bool folders) {
+    _homeNavigatorKey.currentState!.push(
+      MaterialPageRoute<void>(
+        builder: (_) => LocalMusicScreen(
+          controller: _controller,
+          library: _library,
+          initialShowFolders: folders,
+        ),
+      ),
+    );
+  }
 
   String _formatDuration(Duration duration) {
     final minutes = duration.inMinutes;
@@ -215,6 +244,7 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void dispose() {
     _library.dispose();
+    _history.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -224,10 +254,25 @@ class _MainScreenState extends State<MainScreen> {
     return ListenableBuilder(
       listenable: _controller,
       builder: (context, _) => Scaffold(
-        body: NavigatorPopHandler<void>(
-          enabled: currentIndex == 2,
-          onPopWithResult: (_) => _libraryNavigatorKey.currentState!.pop(),
-          child: IndexedStack(index: currentIndex, children: pages),
+        body: IndexedStack(
+          index: currentIndex,
+          children: [
+            NavigatorPopHandler<void>(
+              enabled: currentIndex == 0,
+              onPopWithResult: (_) {
+                if (currentIndex == 0) _homeNavigatorKey.currentState!.pop();
+              },
+              child: pages[0],
+            ),
+            pages[1],
+            NavigatorPopHandler<void>(
+              enabled: currentIndex == 2,
+              onPopWithResult: (_) {
+                if (currentIndex == 2) _libraryNavigatorKey.currentState!.pop();
+              },
+              child: pages[2],
+            ),
+          ],
         ),
         bottomNavigationBar: Column(
           mainAxisSize: MainAxisSize.min,

@@ -15,10 +15,12 @@ class LocalMusicScreen extends StatefulWidget {
     super.key,
     required this.controller,
     required this.library,
+    this.initialShowFolders = false,
   });
 
   final PlaybackController controller;
   final LocalMusicLibrary library;
+  final bool initialShowFolders;
 
   @override
   State<LocalMusicScreen> createState() => _LocalMusicScreenState();
@@ -38,6 +40,7 @@ class _LocalMusicScreenState extends State<LocalMusicScreen> {
   @override
   void initState() {
     super.initState();
+    _showFolders = widget.initialShowFolders;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _loadSongs();
     });
