@@ -1,3 +1,6 @@
+import '../library/playlists.dart';
+import '../library/favorites.dart';
+
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:on_audio_query_pluse/on_audio_query.dart';
@@ -8,11 +11,15 @@ import '../widgets/local_song_list.dart';
 class LocalMusicFolderScreen extends StatefulWidget {
   const LocalMusicFolderScreen({
     super.key,
+    this.playlists,
+    this.favorites,
     required this.folder,
     required this.audioPlayer,
     required this.onPlaySong,
   });
 
+  final Playlists? playlists;
+  final Favorites? favorites;
   final LocalMusicFolder folder;
   final AudioPlayer audioPlayer;
   final Future<void> Function(SongModel) onPlaySong;
@@ -61,6 +68,8 @@ class _LocalMusicFolderScreenState extends State<LocalMusicFolderScreen> {
             ),
             Expanded(
               child: LocalSongList(
+                favorites: widget.favorites,
+                playlists: widget.playlists,
                 songs: widget.folder.songs,
                 audioPlayer: widget.audioPlayer,
                 loadingSongId: _loadingSongId,

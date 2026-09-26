@@ -1,3 +1,5 @@
+import 'library/playlists.dart';
+import 'library/favorites.dart';
 import 'library/local_music_library.dart';
 import 'library/playback_history.dart';
 import 'screens/local_music_screen.dart';
@@ -6,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 
 import 'playback/playback_controller.dart';
+import 'playback/playback_runtime.dart';
 import 'screens/home_screen.dart';
 import 'screens/library_screen.dart';
 import 'screens/now_playing_screen.dart';
@@ -14,12 +17,16 @@ import 'theme/melodify_theme.dart';
 import 'theme/melodify_theme_controller.dart';
 import 'widgets/music_artwork.dart';
 
-void main() {
-  runApp(const MelodifyApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final runtime = await PlaybackRuntime.initialize();
+  runApp(MelodifyApp(runtime: runtime));
 }
 
 class MelodifyApp extends StatefulWidget {
-  const MelodifyApp({super.key});
+  const MelodifyApp({super.key, required this.runtime});
+
+  final PlaybackRuntime runtime;
 
   @override
   State<MelodifyApp> createState() => _MelodifyAppState();
@@ -48,14 +55,23 @@ class _MelodifyAppState extends State<MelodifyApp> {
         debugShowCheckedModeBanner: false,
         title: 'Melodify',
         theme: _themeController.theme,
-        home: MainScreen(themeController: _themeController),
+        home: MainScreen(
+          themeController: _themeController,
+          runtime: widget.runtime,
+        ),
       ),
     );
   }
 }
 
 class MainScreen extends StatefulWidget {
-  const MainScreen({super.key, required this.themeController});
+  const MainScreen({
+    super.key,
+    required this.themeController,
+    required this.runtime,
+  });
+
+  final PlaybackRuntime runtime;
 
   final MelodifyThemeController themeController;
 
@@ -65,13 +81,21 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   int currentIndex = 0;
-  final AudioPlayer _audioPlayer = AudioPlayer();
-  final _history = PlaybackHistory();
-  late final PlaybackController _controller = PlaybackController(
-    _audioPlayer,
-    history: _history,
-  );
-  final _library = LocalMusicLibrary();
+  AudioPlayer get _audioPlayer => _controller.player;
+  PlaybackController get _controller => widget.runtime.controller;
+  PlaybackHistory get _history => widget.runtime.history;
+  Favorites get _favorites => widget.runtime.favorites;
+  Playlists get _playlists => widget.runtime.playlists;
+  LocalMusicLibrary get _library => widget.runtime.library;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.runtime.start();
+    });
+  }
+
   final _homeNavigatorKey = GlobalKey<NavigatorState>();
   final _libraryNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -87,11 +111,18 @@ class _MainScreenState extends State<MainScreen> {
         ),
       ),
     ),
-    SearchScreen(controller: _controller, library: _library),
+    SearchScreen(
+      playlists: _playlists,
+      controller: _controller,
+      library: _library,
+      favorites: _favorites,
+    ),
     Navigator(
       key: _libraryNavigatorKey,
       onGenerateRoute: (_) => MaterialPageRoute<void>(
         builder: (_) => LibraryScreen(
+          playlists: _playlists,
+          favorites: _favorites,
           library: _library,
           controller: _controller,
           themeController: widget.themeController,
@@ -104,6 +135,8 @@ class _MainScreenState extends State<MainScreen> {
     _homeNavigatorKey.currentState!.push(
       MaterialPageRoute<void>(
         builder: (_) => LocalMusicScreen(
+          playlists: _playlists,
+          favorites: _favorites,
           controller: _controller,
           library: _library,
           initialShowFolders: folders,
@@ -138,7 +171,10 @@ class _MainScreenState extends State<MainScreen> {
             return GestureDetector(
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => NowPlayingScreen(controller: _controller),
+                  builder: (_) => NowPlayingScreen(
+                    controller: _controller,
+                    favorites: _favorites,
+                  ),
                 ),
               ),
               child: Container(
@@ -217,7 +253,7 @@ class _MainScreenState extends State<MainScreen> {
                       ),
                       onChanged: durationInMilliseconds > 0
                           ? (value) {
-                              _audioPlayer.seek(
+                              _controller.seek(
                                 Duration(milliseconds: value.round()),
                               );
                             }
@@ -239,14 +275,6 @@ class _MainScreenState extends State<MainScreen> {
         );
       },
     );
-  }
-
-  @override
-  void dispose() {
-    _library.dispose();
-    _history.dispose();
-    _controller.dispose();
-    super.dispose();
   }
 
   @override
@@ -277,6 +305,15 @@ class _MainScreenState extends State<MainScreen> {
         bottomNavigationBar: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            ValueListenableBuilder<String?>(
+              valueListenable: widget.runtime.backgroundIssue,
+              builder: (context, issue, _) => issue == null
+                  ? const SizedBox.shrink()
+                  : Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(issue),
+                    ),
+            ),
             if (_controller.currentSong != null) _buildMiniPlayer(),
             NavigationBar(
               selectedIndex: currentIndex,

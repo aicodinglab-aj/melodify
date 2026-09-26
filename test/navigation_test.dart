@@ -1,3 +1,11 @@
+import 'package:just_audio/just_audio.dart';
+import 'package:melodify/library/playback_history.dart';
+import 'package:melodify/library/local_music_library.dart';
+import 'package:melodify/playback/playback_controller.dart';
+import 'package:melodify/playback/playback_runtime.dart';
+import 'package:melodify/screens/playlists_screen.dart';
+import 'package:melodify/screens/playlist_details_screen.dart';
+import 'package:melodify/screens/liked_songs_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -50,6 +58,20 @@ void main() {
     );
   });
 
+  late PlaybackRuntime runtime;
+  Widget app() {
+    final history = PlaybackHistory();
+    runtime = PlaybackRuntime(
+      controller: PlaybackController(
+        AudioPlayer(handleInterruptions: false),
+        history: history,
+      ),
+      history: history,
+      library: LocalMusicLibrary(),
+    );
+    return MelodifyApp(runtime: runtime);
+  }
+
   Future<void> back(WidgetTester tester, bool system) async {
     if (system) {
       await tester.binding.handlePopRoute();
@@ -69,11 +91,95 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets('Library opens shared Liked Songs and Back retains playback', (
+    tester,
+  ) async {
+    await tester.pumpWidget((await tester.runAsync(() async => app()))!);
+    await tester.pumpAndSettle();
+    final home = tester.widget<HomeScreen>(find.byType(HomeScreen));
+    home.controller.queue.select(home.library.songs, 0);
+    home.controller.toggleShuffle();
+    await tester.pumpAndSettle();
+    await tab(tester, 'Library');
+    await tester.ensureVisible(find.widgetWithText(ListTile, 'Local Music'));
+    await tester.tap(find.widgetWithText(ListTile, 'Local Music'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Like Local song'));
+    await tester.pumpAndSettle();
+    await back(tester, false);
+    await tester.ensureVisible(find.widgetWithText(ListTile, 'Liked Songs'));
+    await tester.tap(find.widgetWithText(ListTile, 'Liked Songs'));
+    await tester.pumpAndSettle();
+    final liked = tester.widget<LikedSongsScreen>(
+      find.byType(LikedSongsScreen),
+    );
+    expect(identical(liked.controller, home.controller), isTrue);
+    expect(identical(liked.library, home.library), isTrue);
+    expect(find.byTooltip('Unlike Local song'), findsOneWidget);
+    expect(find.byTooltip('Close player'), findsOneWidget);
+    await back(tester, true);
+    expect(find.text('Your Library'), findsOneWidget);
+    expect(home.controller.currentIndex, 0);
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(runtime.dispose);
+    await tester.pumpAndSettle();
+  });
+
   for (final system in [false, true]) {
     final mode = system ? 'system Back' : 'AppBar Back';
+    testWidgets(
+      'Library playlist stack respects $mode and keeps the shared player',
+      (tester) async {
+        await tester.pumpWidget((await tester.runAsync(() async => app()))!);
+        await tester.pumpAndSettle();
+        final home = tester.widget<HomeScreen>(find.byType(HomeScreen));
+        home.controller.queue.select(home.library.songs, 0);
+        home.controller.toggleShuffle();
+        await tester.pumpAndSettle();
+        await tab(tester, 'Library');
+        await tester.ensureVisible(find.widgetWithText(ListTile, 'Playlists'));
+        await tester.tap(find.widgetWithText(ListTile, 'Playlists'));
+        await tester.pumpAndSettle();
+        final screen = tester.widget<PlaylistsScreen>(
+          find.byType(PlaylistsScreen),
+        );
+        expect(
+          identical(screen.controller.player, home.controller.player),
+          isTrue,
+        );
+        await tester.tap(find.text('Create Playlist'));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField), 'Navigation Mix');
+        await tester.tap(find.text('Create'));
+        await tester.runAsync(() async {
+          await Future<void>.delayed(Duration.zero);
+        });
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Navigation Mix'));
+        await tester.pumpAndSettle();
+        final detail = tester.widget<PlaylistDetailsScreen>(
+          find.byType(PlaylistDetailsScreen),
+        );
+        expect(identical(detail.playlists, screen.playlists), isTrue);
+        expect(identical(detail.controller, home.controller), isTrue);
+        await tester.tap(find.text('Add Songs'));
+        await tester.pumpAndSettle();
+        await back(tester, system);
+        expect(find.byType(PlaylistDetailsScreen), findsOneWidget);
+        await back(tester, system);
+        expect(find.byType(PlaylistsScreen), findsOneWidget);
+        await back(tester, system);
+        expect(find.text('Your Library'), findsOneWidget);
+        expect(find.byTooltip('Close player'), findsOneWidget);
+        expect(home.controller.currentIndex, 0);
+        await tester.pumpWidget(const SizedBox());
+        await tester.runAsync(runtime.dispose);
+        await tester.pumpAndSettle();
+      },
+    );
     for (final shortcut in ['Local Music', 'Songs', 'Folders']) {
       testWidgets('Home -> $shortcut -> $mode returns to Home', (tester) async {
-        await tester.pumpWidget(const MelodifyApp());
+        await tester.pumpWidget((await tester.runAsync(() async => app()))!);
         await tester.pumpAndSettle();
         final home = tester.widget<HomeScreen>(find.byType(HomeScreen));
         final controller = home.controller;
@@ -113,6 +219,7 @@ void main() {
         );
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox());
+        await tester.runAsync(runtime.dispose);
         await tester.pumpAndSettle();
       });
     }
@@ -120,7 +227,7 @@ void main() {
     testWidgets(
       'Library and Home retain independent folder stacks with $mode',
       (tester) async {
-        await tester.pumpWidget(const MelodifyApp());
+        await tester.pumpWidget((await tester.runAsync(() async => app()))!);
         await tester.pumpAndSettle();
         final player = tester
             .widget<HomeScreen>(find.byType(HomeScreen))
@@ -130,6 +237,9 @@ void main() {
         await tester.pumpAndSettle();
         await tab(tester, 'Library');
         expect(find.text('Your Library'), findsOneWidget);
+        await tester.ensureVisible(
+          find.widgetWithText(ListTile, 'Local Music'),
+        );
         await tester.tap(find.widgetWithText(ListTile, 'Local Music'));
         await tester.pumpAndSettle();
         await tester.tap(find.widgetWithText(ChoiceChip, 'Folders'));
@@ -170,6 +280,7 @@ void main() {
         expect(find.text('Your Library'), findsOneWidget);
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox());
+        await tester.runAsync(runtime.dispose);
         await tester.pumpAndSettle();
       },
     );

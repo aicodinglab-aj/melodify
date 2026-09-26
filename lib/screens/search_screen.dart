@@ -1,3 +1,6 @@
+import '../library/playlists.dart';
+import '../library/favorites.dart';
+
 import 'package:flutter/material.dart';
 import 'package:on_audio_query_pluse/on_audio_query.dart';
 
@@ -8,9 +11,13 @@ import '../widgets/local_song_list.dart';
 class SearchScreen extends StatefulWidget {
   const SearchScreen({
     super.key,
+    this.playlists,
+    this.favorites,
     required this.controller,
     required this.library,
   });
+  final Playlists? playlists;
+  final Favorites? favorites;
   final PlaybackController controller;
   final LocalMusicLibrary library;
 
@@ -87,6 +94,8 @@ class _SearchScreenState extends State<SearchScreen> {
     final results = searchLocalSongs(widget.library.songs, _query);
     if (results.isEmpty) return _message('No songs found');
     return LocalSongList(
+      favorites: widget.favorites,
+      playlists: widget.playlists,
       songs: results,
       audioPlayer: widget.controller.player,
       loadingSongId: _loadingSongId,

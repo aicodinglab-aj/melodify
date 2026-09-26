@@ -1,3 +1,8 @@
+import '../library/playlists.dart';
+import 'playlist_dialogs.dart';
+import '../library/favorites.dart';
+import 'favorite_button.dart';
+
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:on_audio_query_pluse/on_audio_query.dart';
@@ -9,6 +14,9 @@ import 'music_artwork.dart';
 class LocalSongList extends StatelessWidget {
   const LocalSongList({
     super.key,
+    this.favorites,
+    this.playlists,
+    this.onRemoveFromPlaylist,
     required this.songs,
     required this.audioPlayer,
     required this.loadingSongId,
@@ -17,6 +25,9 @@ class LocalSongList extends StatelessWidget {
     this.showAlbum = false,
   });
 
+  final Playlists? playlists;
+  final Future<void> Function(SongModel)? onRemoveFromPlaylist;
+  final Favorites? favorites;
   final List<SongModel> songs;
   final AudioPlayer audioPlayer;
   final int? loadingSongId;
@@ -100,7 +111,34 @@ class LocalSongList extends StatelessWidget {
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (song.duration != null && song.duration! >= 0)
+                      if (playlists != null || onRemoveFromPlaylist != null)
+                        PopupMenuButton<String>(
+                          tooltip: 'Actions for ${song.title}',
+                          onSelected: (value) {
+                            if (value == 'add') {
+                              addSongToPlaylist(context, playlists!, song);
+                            } else {
+                              onRemoveFromPlaylist?.call(song);
+                            }
+                          },
+                          itemBuilder: (_) => [
+                            if (playlists != null)
+                              const PopupMenuItem(
+                                value: 'add',
+                                child: Text('Add to playlist'),
+                              ),
+                            if (onRemoveFromPlaylist != null)
+                              const PopupMenuItem(
+                                value: 'remove',
+                                child: Text('Remove from playlist'),
+                              ),
+                          ],
+                        ),
+                      if (favorites != null)
+                        FavoriteButton(favorites: favorites!, song: song),
+                      if (playlists == null &&
+                          song.duration != null &&
+                          song.duration! >= 0)
                         Text(
                           _formatDuration(song.duration!),
                           style: Theme.of(context).textTheme.bodySmall,

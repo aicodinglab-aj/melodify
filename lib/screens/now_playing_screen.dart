@@ -1,3 +1,6 @@
+import '../widgets/favorite_button.dart';
+import '../library/favorites.dart';
+
 import 'package:flutter/material.dart';
 
 import '../playback/playback_controller.dart';
@@ -6,8 +9,9 @@ import '../theme/melodify_theme.dart';
 import '../widgets/music_artwork.dart';
 
 class NowPlayingScreen extends StatelessWidget {
-  const NowPlayingScreen({super.key, required this.controller});
+  const NowPlayingScreen({super.key, required this.controller, this.favorites});
 
+  final Favorites? favorites;
   final PlaybackController controller;
 
   String _time(Duration value) =>
@@ -18,7 +22,16 @@ class NowPlayingScreen extends StatelessWidget {
     return ListenableBuilder(
       listenable: controller,
       builder: (context, _) => Scaffold(
-        appBar: AppBar(title: const Text('Now Playing')),
+        appBar: AppBar(
+          title: const Text('Now Playing'),
+          actions: [
+            if (favorites != null && controller.currentSong != null)
+              FavoriteButton(
+                favorites: favorites!,
+                song: controller.currentSong!,
+              ),
+          ],
+        ),
         body: controller.currentSong == null
             ? const Center(child: Text('Nothing playing'))
             : SafeArea(
@@ -59,7 +72,7 @@ class NowPlayingScreen extends StatelessWidget {
                                     .toDouble(),
                                 max: max > 0 ? max.toDouble() : 1,
                                 onChanged: max > 0
-                                    ? (value) => controller.player.seek(
+                                    ? (value) => controller.seek(
                                         Duration(milliseconds: value.round()),
                                       )
                                     : null,

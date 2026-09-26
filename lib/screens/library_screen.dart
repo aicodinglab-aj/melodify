@@ -1,3 +1,7 @@
+import 'playlists_screen.dart';
+import '../library/playlists.dart';
+import 'liked_songs_screen.dart';
+import '../library/favorites.dart';
 import '../library/local_music_library.dart';
 
 import 'package:flutter/material.dart';
@@ -14,14 +18,29 @@ import 'settings_screen.dart';
 class LibraryScreen extends StatelessWidget {
   const LibraryScreen({
     super.key,
+    this.playlists,
+    this.favorites,
     required this.controller,
     required this.library,
     required this.themeController,
   });
 
+  final Playlists? playlists;
+  final Favorites? favorites;
   final PlaybackController controller;
   final LocalMusicLibrary library;
   final MelodifyThemeController themeController;
+
+  void _openPlaylists(BuildContext context) => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => PlaylistsScreen(
+        playlists: playlists!,
+        library: library,
+        controller: controller,
+        favorites: favorites,
+      ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -62,7 +81,12 @@ class LibraryScreen extends StatelessWidget {
               spacing: 10,
               runSpacing: 8,
               children: [
-                const Chip(label: Text('Playlists')),
+                ActionChip(
+                  label: const Text('Playlists'),
+                  onPressed: playlists == null
+                      ? null
+                      : () => _openPlaylists(context),
+                ),
                 // These remain presentation-only, matching the existing chips.
                 // The current library view is represented by the Songs chip.
                 Semantics(
@@ -88,14 +112,40 @@ class LibraryScreen extends StatelessWidget {
             const SizedBox(height: 28),
             Text('Your Music', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 16),
-            const Card(
+            Card(
               child: ListTile(
-                leading: MusicArtwork(
+                onTap: favorites == null
+                    ? null
+                    : () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => LikedSongsScreen(
+                            controller: controller,
+                            library: library,
+                            favorites: favorites!,
+                            playlists: playlists,
+                          ),
+                        ),
+                      ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                leading: const MusicArtwork(
                   icon: Icons.favorite_rounded,
                   gradient: MelodifyColors.pinkArtwork,
                 ),
-                title: Text('Liked Songs'),
-                subtitle: Text('Songs you have liked'),
+                title: const Text('Liked Songs'),
+                subtitle: const Text('Songs you have liked'),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Card(
+              child: ListTile(
+                leading: const MusicArtwork(
+                  icon: Icons.queue_music_rounded,
+                  active: true,
+                ),
+                title: const Text('Playlists'),
+                subtitle: const Text('Music organized by you'),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: playlists == null ? null : () => _openPlaylists(context),
               ),
             ),
             const SizedBox(height: 10),
@@ -123,6 +173,8 @@ class LibraryScreen extends StatelessWidget {
                   Navigator.of(context).push(
                     MaterialPageRoute<void>(
                       builder: (context) => LocalMusicScreen(
+                        favorites: favorites,
+                        playlists: playlists,
                         controller: controller,
                         library: library,
                       ),

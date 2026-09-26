@@ -1,3 +1,5 @@
+import '../library/playlists.dart';
+import '../library/favorites.dart';
 import '../library/local_music_library.dart';
 
 import 'package:flutter/material.dart';
@@ -13,11 +15,15 @@ import 'local_music_folder_screen.dart';
 class LocalMusicScreen extends StatefulWidget {
   const LocalMusicScreen({
     super.key,
+    this.playlists,
+    this.favorites,
     required this.controller,
     required this.library,
     this.initialShowFolders = false,
   });
 
+  final Playlists? playlists;
+  final Favorites? favorites;
   final PlaybackController controller;
   final LocalMusicLibrary library;
   final bool initialShowFolders;
@@ -218,6 +224,8 @@ class _LocalMusicScreenState extends State<LocalMusicScreen> {
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(
                         builder: (_) => LocalMusicFolderScreen(
+                          favorites: widget.favorites,
+                          playlists: widget.playlists,
                           folder: folder,
                           audioPlayer: widget.controller.player,
                           onPlaySong: (song) => _playSong(song, folder.songs),
@@ -268,6 +276,8 @@ class _LocalMusicScreenState extends State<LocalMusicScreen> {
 
     if (_showFolders) return _buildFolders();
     return LocalSongList(
+      favorites: widget.favorites,
+      playlists: widget.playlists,
       songs: _songs,
       audioPlayer: widget.controller.player,
       loadingSongId: _loadingSongId,
