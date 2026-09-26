@@ -5,6 +5,7 @@ import '../library/local_music_library.dart';
 import '../library/playlists.dart';
 import '../playback/playback_controller.dart';
 import '../widgets/music_artwork.dart';
+import '../widgets/local_song_artwork.dart';
 import '../widgets/playlist_dialogs.dart';
 import 'playlist_details_screen.dart';
 
@@ -109,11 +110,14 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> {
                       itemCount: widget.playlists.items.length,
                       itemBuilder: (context, index) {
                         final playlist = widget.playlists.items[index];
-                        final count = widget.playlists
-                            .resolve(playlist.id, widget.library.songs)
-                            .length;
+                        final available = widget.playlists.resolve(
+                          playlist.id,
+                          widget.library.songs,
+                        );
+                        final count = available.length;
                         return ListTile(
-                          leading: const MusicArtwork(
+                          leading: LocalSongArtwork(
+                            songs: available,
                             icon: Icons.queue_music_rounded,
                           ),
                           title: Text(

@@ -14,11 +14,13 @@ class PlaybackController extends ChangeNotifier {
         final song = _pendingHistory;
         if (song != null && identical(song, currentSong)) {
           _pendingHistory = null;
+          _recordedSong = song;
           if (history != null) unawaited(history!.record(song));
         }
       }
       if (state.processingState == ProcessingState.completed &&
           !_handlingCompletion &&
+          !_hidden &&
           queue.current != null) {
         _handlingCompletion = true;
         unawaited(
@@ -47,6 +49,17 @@ class PlaybackController extends ChangeNotifier {
   int _userActionRevision = 0;
   bool _wantsPlayback = false;
   bool _playbackEnabled = true;
+  bool _hidden = false;
+  bool _startupMiniPlayerHidden = false;
+  Duration _resumePosition = Duration.zero;
+  SongModel? _recordedSong;
+  bool get playerVisible => currentSong != null && !_hidden;
+  bool get miniPlayerVisible => playerVisible && !_startupMiniPlayerHidden;
+  bool get canGoNext => queue.canNext;
+  bool get canGoPrevious => queue.canPrevious;
+  bool get canResume =>
+      currentSong != null && playbackError == null && _playbackEnabled;
+
   void setPlaybackEnabled(bool enabled) {
     _playbackEnabled = enabled;
   }
@@ -72,6 +85,7 @@ class PlaybackController extends ChangeNotifier {
     if (index < 0) throw StateError('Song is not in the displayed list.');
     _userActionRevision++;
     _wantsPlayback = true;
+    _hidden = false;
     queue.select(songs, index);
     notifyListeners();
     await _loadCurrent();
@@ -90,7 +104,10 @@ class PlaybackController extends ChangeNotifier {
   Future<void> _loadCurrent() {
     final song = currentSong;
     if (song == null) return Future.value();
+    _startupMiniPlayerHidden = false;
     final generation = ++_generation;
+    _recordedSong = null;
+    _resumePosition = Duration.zero;
     _loadedSong = null;
     _pendingHistory = null;
     playbackError = null;
@@ -157,6 +174,7 @@ class PlaybackController extends ChangeNotifier {
         _loadedSong = song;
         _pendingHistory = null;
         playbackError = null;
+        _startupMiniPlayerHidden = true;
         queue.select(songs.sublist(index), 0);
         notifyListeners();
         return;
@@ -164,9 +182,9 @@ class PlaybackController extends ChangeNotifier {
     });
   }
 
-  void _startPlayback() {
+  void _startPlayback({bool recordHistory = true}) {
     if (!_playbackEnabled || !_wantsPlayback || !sourceReady) return;
-    _pendingHistory = _loadedSong;
+    _pendingHistory = recordHistory ? _loadedSong : null;
     final generation = _generation;
     unawaited(
       player.play().catchError((Object error) {
@@ -197,8 +215,14 @@ class PlaybackController extends ChangeNotifier {
 
   Future<void> play({bool userInitiated = true}) async {
     if (userInitiated) _userActionRevision++;
-    if (currentSong == null) return;
+    if (!canResume) return;
+    _startupMiniPlayerHidden = false;
+    notifyListeners();
     _wantsPlayback = true;
+    if (_hidden) {
+      await _resumeHidden();
+      return;
+    }
     if (!sourceReady || player.playing) return;
     if (player.processingState == ProcessingState.completed) {
       await player.seek(Duration.zero);
@@ -233,6 +257,7 @@ class PlaybackController extends ChangeNotifier {
   Future<void> next() async {
     _userActionRevision++;
     if (queue.next() != null) {
+      _hidden = false;
       _wantsPlayback = true;
       notifyListeners();
       await _loadForTransport();
@@ -243,9 +268,11 @@ class PlaybackController extends ChangeNotifier {
     _userActionRevision++;
     if (currentSong == null) return;
     if (player.position > const Duration(seconds: 3)) {
+      if (_hidden) _resumePosition = Duration.zero;
       await player.seek(Duration.zero);
       return;
     }
+    _hidden = false;
     _wantsPlayback = true;
     queue.previous();
     notifyListeners();
@@ -282,6 +309,51 @@ class PlaybackController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Dismiss the UI/media presentation without destroying the session.
+  Future<void> hidePlayer() async {
+    _userActionRevision++;
+    _wantsPlayback = false;
+    if (!_hidden && sourceReady) _resumePosition = player.position;
+    _hidden = true;
+    ++_generation; // Cancel startup or source publication still in flight.
+    _pendingHistory = null;
+    notifyListeners();
+    await player.pause();
+  }
+
+  Future<void> _resumeHidden() async {
+    final song = currentSong!;
+    final position = _resumePosition;
+    final recordHistory = !identical(_recordedSong, song);
+    final generation = ++_generation;
+    _hidden = false;
+    _loadedSong = null;
+    notifyListeners();
+    await _withSourceLock(() async {
+      if (!_isCurrent(generation)) return;
+      try {
+        // Revalidate the source: it may have been deleted while hidden.
+        await player.stop();
+        if (!_isCurrent(generation)) return;
+        await _loadSource(song);
+        if (!_isCurrent(generation)) return;
+        await player.seek(position);
+        if (!_isCurrent(generation)) return;
+        _loadedSong = song;
+        _startPlayback(recordHistory: recordHistory);
+        notifyListeners();
+      } catch (_) {
+        if (!_isCurrent(generation)) return;
+        _loadedSong = null;
+        _resumePosition = Duration.zero;
+        _hidden = true;
+        queue.clear();
+        _reportPlaybackError();
+      }
+    });
+  }
+
+  /// Explicit destructive clear, distinct from the mini-player/notification X.
   Future<void> close() async {
     _userActionRevision++;
     _wantsPlayback = false;
@@ -289,6 +361,9 @@ class PlaybackController extends ChangeNotifier {
     _loadedSong = null;
     _pendingHistory = null;
     playbackError = null;
+    _hidden = false;
+    _resumePosition = Duration.zero;
+    _recordedSong = null;
     queue.clear();
     notifyListeners();
     await _withSourceLock(() async {

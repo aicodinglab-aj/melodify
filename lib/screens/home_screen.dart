@@ -4,7 +4,7 @@ import 'package:on_audio_query_pluse/on_audio_query.dart';
 import '../library/local_music_library.dart';
 import '../library/playback_history.dart';
 import '../playback/playback_controller.dart';
-import '../widgets/music_artwork.dart';
+import '../widgets/local_song_artwork.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
@@ -102,7 +102,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            MusicArtwork(
+                            LocalSongArtwork(
+                              song: song,
                               size: 64,
                               active:
                                   widget.controller.currentSong?.id == song.id,
@@ -230,7 +231,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   stream: widget.controller.player.playingStream,
                   initialData: widget.controller.player.playing,
                   builder: (context, snapshot) => IconButton.filled(
-                    onPressed: widget.controller.currentSong == null
+                    onPressed: !widget.controller.canResume
                         ? null
                         : widget.controller.togglePlayback,
                     tooltip: snapshot.data == true ? 'Pause' : 'Play',

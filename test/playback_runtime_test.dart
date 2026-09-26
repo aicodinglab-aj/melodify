@@ -1,3 +1,7 @@
+import 'package:audio_service/audio_service.dart';
+
+import 'dart:io';
+
 import 'package:audio_service_platform_interface/audio_service_platform_interface.dart';
 import 'package:audio_service_platform_interface/method_channel_audio_service.dart';
 import 'package:flutter/services.dart';
@@ -13,6 +17,16 @@ void main() {
     AudioServicePlatform.instance = MethodChannelAudioService();
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final cacheRoot = await Directory.systemTemp.createTemp(
+      'melodify-media-test-',
+    );
+    const paths = MethodChannel('plugins.flutter.io/path_provider');
+    messenger.setMockMethodCallHandler(paths, (_) async => cacheRoot.path);
+    addTearDown(() async {
+      await AudioService.cacheManager.dispose();
+      messenger.setMockMethodCallHandler(paths, null);
+      await cacheRoot.delete(recursive: true);
+    });
     var registrations = 0;
     const client = MethodChannel('com.ryanheise.audio_service.client.methods');
     const handler = MethodChannel(

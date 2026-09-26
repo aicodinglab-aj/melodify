@@ -10,6 +10,7 @@ import '../library/local_music_library.dart';
 import '../library/playback_history.dart';
 import '../library/playlists.dart';
 import 'media_artwork.dart';
+import 'notification_settings.dart';
 import 'melodify_audio_handler.dart';
 import 'playback_controller.dart';
 import 'playback_interruptions.dart';
@@ -31,6 +32,14 @@ class PlaybackRuntime {
       controller,
       artworkResolver: artworkResolver,
     );
+    _notificationState = controller.player.playerStateStream.listen((state) {
+      if (!state.playing) return;
+      _notificationCheck?.cancel();
+      _notificationCheck = Timer(
+        const Duration(seconds: 1),
+        notifications.refresh,
+      );
+    });
     restoration = StartupPlaybackRestoration(
       controller: controller,
       history: history,
@@ -51,15 +60,19 @@ class PlaybackRuntime {
       library: LocalMusicLibrary(),
       artworkResolver: MediaArtwork().resolve,
     );
-    runtime._serviceErrors = AudioService.asyncError.listen((_) {
+    runtime._serviceErrors = AudioService.asyncError.listen((error) {
+      debugPrint("Melodify media service error: $error");
       runtime.backgroundIssue.value = 'System media controls encountered an error. Restart Melodify if controls remain unavailable.';
     });
     try {
       await AudioService.init<MelodifyAudioHandler>(
         builder: () => runtime.handler,
         config: const AudioServiceConfig(
-          androidNotificationChannelId: 'com.example.melodify.playback',
+          androidNotificationChannelId: NotificationSettings.channelId,
           androidNotificationChannelName: 'Music playback',
+          androidNotificationChannelDescription:
+              'Playback controls for Melodify music',
+          androidNotificationClickStartsActivity: true,
           androidNotificationIcon: 'drawable/ic_stat_music',
           androidStopForegroundOnPause: false,
           androidResumeOnClick: false,
@@ -67,7 +80,10 @@ class PlaybackRuntime {
           artDownscaleHeight: 256,
         ),
       );
-    } catch (_) {
+    } catch (error, stack) {
+      debugPrint(
+        "Melodify media service initialization failed: $error\n$stack",
+      );
       // Keep the existing player; never create a fallback/background player.
       runtime.backgroundIssue.value =
           'Background playback is unavailable. Restart Melodify to retry.';
@@ -98,6 +114,9 @@ class PlaybackRuntime {
   final Playlists playlists;
   late final MelodifyAudioHandler handler;
   late final StartupPlaybackRestoration restoration;
+  final notifications = NotificationSettings();
+  StreamSubscription<PlayerState>? _notificationState;
+  Timer? _notificationCheck;
   final backgroundIssue = ValueNotifier<String?>(null);
   PlaybackInterruptions? _interruptions;
   StreamSubscription<Object>? _serviceErrors;
@@ -115,6 +134,9 @@ class PlaybackRuntime {
     if (_disposed) return;
     _disposed = true;
     restoration.dispose();
+    _notificationCheck?.cancel();
+    await _notificationState?.cancel();
+    notifications.dispose();
     await _interruptions?.dispose();
     await _serviceErrors?.cancel();
     await controller.close();

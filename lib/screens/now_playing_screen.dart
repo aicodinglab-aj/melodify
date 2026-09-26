@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import '../playback/playback_controller.dart';
 import '../playback/playback_queue.dart';
 import '../theme/melodify_theme.dart';
-import '../widgets/music_artwork.dart';
+import '../widgets/local_song_artwork.dart';
 
 class NowPlayingScreen extends StatelessWidget {
   const NowPlayingScreen({super.key, required this.controller, this.favorites});
@@ -40,9 +40,14 @@ class NowPlayingScreen extends StatelessWidget {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Expanded(
+                      Expanded(
                         child: Center(
-                          child: MusicArtwork(size: 220, active: true),
+                          child: LocalSongArtwork(
+                            song: controller.currentSong,
+                            size: 220,
+                            active: true,
+                            large: true,
+                          ),
                         ),
                       ),
                       Text(

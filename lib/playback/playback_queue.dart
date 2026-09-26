@@ -17,6 +17,14 @@ class PlaybackQueue<T> {
   int get index => _index;
   T? get current => _index < 0 ? null : _items[_index];
   bool get isEmpty => _items.isEmpty;
+  // Manual Next semantics, without advancing the queue or drawing shuffle RNG.
+  bool get canNext =>
+      !isEmpty &&
+      (mode == PlaybackMode.shuffle ||
+          mode == PlaybackMode.repeatAll ||
+          _index + 1 < _items.length);
+  // Previous can always restart the first/current track in the existing policy.
+  bool get canPrevious => !isEmpty;
 
   void select(List<T> items, int index) {
     if (index < 0 || index >= items.length) {

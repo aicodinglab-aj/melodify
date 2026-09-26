@@ -355,21 +355,23 @@ void main() {
     },
   );
 
-  test(
-    'task removal keeps playback, notification dismissal explicitly stops',
-    () async {
-      final r = BackgroundRig();
-      addTearDown(r.dispose);
-      await r.select();
-      await r.handler.onTaskRemoved();
-      expect(r.player.playing, isTrue);
-      expect(r.controller.queue.items.length, 3);
-      await r.handler.onNotificationDeleted();
-      await flushEvents();
-      expect(r.player.playing, isFalse);
-      expect(r.handler.queue.value, isEmpty);
-    },
-  );
+  test('task removal keeps playback, notification dismissal pauses and retains queue', () async {
+    final r = BackgroundRig();
+    addTearDown(r.dispose);
+    await r.select();
+    await r.handler.onTaskRemoved();
+    expect(r.player.playing, isTrue);
+    expect(r.controller.queue.items.length, 3);
+    await r.handler.onNotificationDeleted();
+    await flushEvents();
+    expect(r.player.playing, isFalse);
+    expect(r.handler.queue.value.length, 3);
+    expect(r.controller.playerVisible, isFalse);
+    expect(
+      r.handler.playbackState.value.processingState,
+      AudioProcessingState.idle,
+    );
+  });
 
   for (final type in AudioInterruptionType.values) {
     test('interruption $type pauses and only resumable types resume', () async {

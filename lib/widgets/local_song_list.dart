@@ -8,7 +8,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:on_audio_query_pluse/on_audio_query.dart';
 
 import '../theme/melodify_theme.dart';
-import 'music_artwork.dart';
+import 'local_song_artwork.dart';
 
 /// Presentation only: the owner supplies the existing player and play callback.
 class LocalSongList extends StatelessWidget {
@@ -90,7 +90,8 @@ class LocalSongList extends StatelessWidget {
                 clipBehavior: Clip.antiAlias,
                 child: ListTile(
                   selected: isCurrent,
-                  leading: MusicArtwork(
+                  leading: LocalSongArtwork(
+                    song: song,
                     active: isCurrent,
                     icon: isCurrent && isPlaying
                         ? Icons.graphic_eq_rounded

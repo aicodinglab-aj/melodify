@@ -34,6 +34,7 @@ class MelodifyAudioHandler extends BaseAudioHandler {
   String? _artKey;
   Uri? _artUri;
   bool _disposed = false;
+  bool _presentationActive = false;
 
   static String? _metadata(String? value) {
     final text = value?.trim();
@@ -61,6 +62,9 @@ class MelodifyAudioHandler extends BaseAudioHandler {
 
   void _sync() {
     if (_disposed) return;
+    final active = controller.playerVisible;
+    final reopening = active && !_presentationActive;
+    _presentationActive = active;
     final song = controller.currentSong;
     final key = song == null ? null : PlaybackHistory.keyFor(song);
     if (key != _artKey) {
@@ -84,7 +88,8 @@ class MelodifyAudioHandler extends BaseAudioHandler {
         .toList(growable: false);
     final previous = queue.value;
     // MediaItem equality is ID-based, so compare metadata explicitly.
-    if (previous.length != items.length ||
+    if (reopening ||
+        previous.length != items.length ||
         List.generate(
           items.length,
           (i) => _sameItem(previous[i], items[i]),
@@ -94,7 +99,9 @@ class MelodifyAudioHandler extends BaseAudioHandler {
     final current = controller.currentIndex < 0
         ? null
         : items[controller.currentIndex];
-    if (!_sameItem(mediaItem.value, current)) mediaItem.add(current);
+    if (reopening || !_sameItem(mediaItem.value, current)) {
+      mediaItem.add(current);
+    }
     _broadcast();
   }
 
@@ -121,7 +128,7 @@ class MelodifyAudioHandler extends BaseAudioHandler {
   void _broadcast() {
     if (_disposed) return;
     final player = controller.player;
-    final active = controller.currentSong != null;
+    final active = controller.playerVisible;
     final mode = controller.mode;
     final processing = !active
         ? AudioProcessingState.idle
@@ -130,7 +137,9 @@ class MelodifyAudioHandler extends BaseAudioHandler {
         : !controller.sourceReady
         ? AudioProcessingState.loading
         : switch (player.processingState) {
-            audio.ProcessingState.idle => AudioProcessingState.idle,
+            // A retained active source can be idle during native stop/reload.
+            // Publishing session idle here tears down Android notification/service.
+            audio.ProcessingState.idle => AudioProcessingState.ready,
             audio.ProcessingState.loading => AudioProcessingState.loading,
             audio.ProcessingState.buffering => AudioProcessingState.buffering,
             audio.ProcessingState.ready => AudioProcessingState.ready,
@@ -195,7 +204,7 @@ class MelodifyAudioHandler extends BaseAudioHandler {
   @override
   Future<void> pause() => _command(controller.pause);
   @override
-  Future<void> stop() => _command(controller.close);
+  Future<void> stop() => _command(controller.hidePlayer);
   @override
   Future<void> seek(Duration position) =>
       _command(() => controller.seek(position));

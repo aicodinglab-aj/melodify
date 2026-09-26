@@ -53,6 +53,7 @@ tool versions and SDK-derived Android defaults describe this review environment.
 | `lib/main.dart` | App/theme lifecycle, injected playback runtime, tab shell, independent Home/Library navigators, mini-player |
 | `lib/playback/playback_controller.dart` | Shared playback, serialized source loads, paused recent-song restoration, completion/history hooks and disposal |
 | `lib/playback/startup_playback_restoration.dart` | Runtime-owned startup coordinator waiting for restored history and ready library availability |
+| `lib/playback/notification_settings.dart` | Read-only Android channel-block status and user-initiated settings link |
 | `lib/playback/playback_queue.dart` | Backend-independent generic queue, mode and shuffle history |
 | `lib/library/local_music_library.dart` | Shared session collection, permission/query lifecycle, in-memory search helper |
 | `lib/library/playlists.dart` | Immutable playlist metadata, observable repository, store interface and versioned SharedPreferences JSON adapter |
@@ -61,9 +62,11 @@ tool versions and SDK-derived Android defaults describe this review environment.
 | `lib/models/local_music_folder.dart` | Immutable folder membership, path normalization, grouping/sorting |
 | `lib/screens/` | Home, Search, Library, Local Music, Folder, Liked Songs, Playlists, Playlist Details/Add Songs, Now Playing, Settings, Themes, About |
 | `lib/widgets/local_song_list.dart` | Shared song rows; player state, delegated selection, favorite hearts and playlist menus |
-| `lib/widgets/music_artwork.dart` | Decorative icon/gradient artwork; not extracted album art |
+| `lib/widgets/music_artwork.dart` | Theme-aware fallback when real artwork is unavailable |
+| `lib/library/local_artwork_repository.dart` | Shared lazy MediaStore artwork requests, validation and bounded LRU cache |
+| `lib/widgets/local_song_artwork.dart` | Shared real-artwork renderer and injectable repository scope |
 | `lib/theme/` | Base colors, theme IDs/palettes/Material styling, preferences controller |
-| `test/` | Fifteen Dart unit/widget test files |
+| `test/` | Dart unit/widget and native-channel contract tests |
 | `assets/` | Launcher source image and bundled `audio/test_song.mp3` |
 | `android/` | Android manifest, Kotlin activity, resources and Gradle configuration |
 | `ios/`, `macos/`, `linux/`, `windows/`, `web/` | Other platform runners and packaging scaffolding; unverified as music-player targets |
@@ -134,11 +137,14 @@ disposes the controller/player; widget disposal and backgrounding do not.
   all entry points, next/previous, automatic completion and repeat/resume without
   changing PlaybackQueue mode semantics.
 - Play/pause uses the shared player and only starts a source matching the loaded
-  current song; replay from completed state seeks to zero. Close cancels pending
-  restoration/loading, immediately clears the queue/hides the mini-player, and
-  serializes its stop before any later selection loads.
-- The mini-player includes title, artist fallback, play/pause, close, seek slider,
-  elapsed/total duration and navigation to Now Playing. It appears when a song is selected.
+  current song; replay from completed state seeks to zero. Mini-player Close now
+  pauses/hides the player while retaining its queue, index, mode and saved position.
+  Explicit controller.close() remains destructive clear for session shutdown.
+- The shared mini-player includes title/artist ellipsis, artwork, Previous,
+  Play/Pause, Next, nondestructive X, seeking and elapsed/total duration. Startup
+  restoration leaves it hidden; an explicit play/resume or song selection shows it.
+  Only tapping the song information opens Now Playing. Narrow layouts place the
+  four transport controls on a second row with 48px touch targets.
 - Now Playing includes seek, timing, previous/next, play/pause, shuffle and repeat;
   it also has a synchronized, theme-aware favorite heart and shows a blank-state message when no song exists. There is no queue editor/view.
 
@@ -183,9 +189,10 @@ no intervening user action, Close, disconnect or newer interruption invalidated
 that resume. Unknown/permanent loss stays paused. Noisy wired/Bluetooth disconnect
 pauses without later auto-resume. The app does not change routes or force focus.
 
-Explicit app Close, system Stop or notification dismissal stops the player, clears
-the queue/media item and publishes idle to stop the service/remove the notification.
-Close invalidates pending startup/source work. Home/app switching, lock and task
+Mini-player Close, system Stop and notification dismissal now pause and hide the
+player, preserve resumable state and publish idle to stop the media presentation.
+Explicit controller.close() is the separate destructive clear. Both invalidate
+pending startup/source work. Home/app switching, lock and task
 removal do not call Close. Android uses androidStopForegroundOnPause=false to keep
 a paused ongoing session eligible for background resume; this can retain a foreground
 notification while paused. androidResumeOnClick=false prevents retained controls
@@ -233,13 +240,172 @@ Physical Android checklist (record device, OS/API, build and observed results):
 - [ ] Play from folders/Search/Liked Songs/playlists; verify order and index.
 - [ ] Swipe UI task from Recents while playing and paused; record actual OEM behavior.
 - [ ] Use Melodify Close/system Stop; verify audio/service notification stops and
-      queue stays empty on same-runtime reopen.
+      Home Play resumes the same queue/index at the saved position on same-runtime reopen.
 - [ ] Kill/restart process; verify normal paused recent-song restoration, no autoplay.
 - [ ] Delete a queued file/artwork or revoke availability; verify safe error/fallback.
 - [ ] Record Android-version notification layout, dismissal/seek support, battery
       policy and foreground-service restrictions encountered (none observed yet).
 - [ ] On physical iOS: verify local discovery/permissions, background audio, lock
       controls, route changes and interruption behavior before claiming iOS support.
+
+### Resumable Close and notification follow-up (2026-09-26)
+
+**Home bug root cause:** mini-player X called destructive controller.close(), which
+cleared the song/queue. Home correctly disabled its current-song Play action after
+that loss. UI visibility is now a controller-owned flag independent of queue state.
+Mini-player X and AudioHandler.stop()/notification dismissal call hidePlayer():
+pause audio, hide the mini-player, retain current song, queue/index, shuffle history,
+mode and position, and make the media session idle. Explicit controller.close()
+still clears everything and is used for full runtime shutdown.
+
+Home Play derives availability from canResume (a current nonfailed song and enabled
+playback). Reopening revalidates the file/URI on the same player, seeks to the saved
+position, republishes queue/metadata and resumes. It never reconstructs the queue
+or resets mode/history. Missing-source resume clears invalid resumable state and
+shows the existing playback error. A track already successfully recorded before
+hide does not receive an extra history write just for reopening. Pending source/
+startup operations and interruption resumes cannot override Close; a second Close
+while resume is loading retains the saved position and cancels late autoplay.
+This is in-memory resumption; process restart still restores a recent song paused
+at zero, not the exact previous session.
+
+**Notification audit and evidence:** existing service/receiver declarations,
+AudioServiceActivity, mediaPlayback service type, WAKE_LOCK/FOREGROUND_SERVICE/
+FOREGROUND_SERVICE_MEDIA_PLAYBACK permissions, retained white vector icon,
+min SDK 24 and Flutter compile/target SDK 36 configuration were inspected. They
+were retained. Channel ID remains com.example.melodify.playback, name Music
+playback; description and activity-opening behavior are explicit. The package
+creates its channel at LOW importance and uses a media-session notification.
+Do not change channel IDs to bypass user notification preferences.
+
+The handler previously mapped the backend's idle state directly to session idle,
+which audio_service uses to tear down its service/notification even with a retained
+current track. Session idle is now reserved for explicitly hidden/cleared sessions;
+a retained idle source is published as ready/paused. Reopening also republishes
+queue and MediaItem even when identifiers are unchanged, because native session
+state may have been discarded on Stop. Tests verify actual Dart-to-native channel
+messages, including playing=true/ready, metadata, queue and controls. Native init/
+asynchronous errors are now logged with their underlying error instead of only a
+generic UI notice. This fixes identified lifecycle weaknesses, but **the physical-device log now confirms an Android CustomAction icon failure**.
+The release shrinker report identifies stripped standard transport drawables;
+see the targeted icon fix below. Notification visibility after that fix still
+requires a physical-device re-test.
+
+Android 13+ media-session notifications are exempt from POST_NOTIFICATIONS runtime
+permission requirements. No unrelated or unnecessary permission/prompt was added.
+The Android bridge reads whether the Music playback channel is blocked. A blocked
+channel produces an explicit settings button; checks run on foreground return and
+after playback begins, and never auto-open settings or repeatedly ask permission.
+Changing the setting clears the notice after returning. Platform settings failures
+cannot stop audio. This channel-specific check does not claim to detect every OEM
+or global media-control restriction. The activity unregisters its channel on engine
+cleanup; runtime shutdown cancels notification timers/listeners.
+
+Controls remain Previous | Play/Pause | Next in compact UI, plus Stop where Android
+permits. Stop has resumable Close semantics. Queue/index/modes, Bluetooth commands,
+three-second Previous and interruption/noisy-output policy use the same controller.
+androidStopForegroundOnPause=false retains ordinary paused sessions; explicit hidden
+session idle dismisses presentation. androidResumeOnClick=false removes the old
+notification when the service stops. Android 13+ system layouts choose controls
+from session actions and may omit/rearrange Stop; expanded/compact layouts are OEM
+controlled. No separate notification/player engine was added.
+
+Verification: 14 new tests; all 170 tests pass; flutter analyze has no issues;
+dart format lib test completed (52 files). No package changes. No APK build or
+flutter clean. Android native compilation and physical-device behavior remain
+unverified; adb devices reported no connected devices during this task. Check
+Home/lock/background playback, all notification actions, channel
+blocking/unblocking, Close at 2:15 -> Home resume at 2:15, process restart and
+OEM task-removal behavior on a physical device. For unresolved notification
+absence collect the Android/API/device, channel settings, and app-filtered native
+logs including 'Melodify media service' errors.
+
+References: [Android notification permission exemptions](https://developer.android.com/develop/ui/views/notifications/notification-permission#exemptions),
+[audio_service setup](https://pub.dev/packages/audio_service).
+
+### Confirmed Android CustomAction icon crash fix (2026-09-26)
+
+User-supplied physical Android logs confirm IllegalArgumentException / PlatformException:
+"You must specify an icon resource id to build a CustomAction". This is the
+confirmed media-control publication failure, not a missing POST_NOTIFICATIONS
+permission or an invalid notification status icon.
+
+The offending published control is standard MediaControl.stop, whose icon is
+`drawable/audio_service_stop`. Installed audio_service 0.18.19 converts standard
+Stop to `com.ryanheise.audioservice.action.STOP` as a native CustomAction on API 33+.
+Its Java createCustomAction resolves the icon via Resources.getIdentifier; Android
+rejects the CustomAction when the resolved ID is zero. No Dart CustomMediaAction
+is declared in Melodify. systemActions contains capabilities, not icon-bearing
+custom buttons, and does not create this offending action.
+
+Existing build/app/outputs/mapping/release/resources.txt (inspected, not rebuilt;
+mtime 2026-09-26 14:24:07 local) marks audio_service_stop, pause, play_arrow,
+skip_previous and skip_next as "not reachable". ic_stat_music is retained by the
+old keep.xml. Thus a valid status icon did not protect the individual control icons
+referenced only by Dart strings. The installed package supplies the PNG drawables;
+the missing app shrinker retention was the defect.
+
+The targeted fix expands android/app/src/main/res/raw/keep.xml to retain the exact
+five standard control drawables plus ic_stat_music. Standard MediaControl actions,
+handler transport methods, systemActions, service configuration, manifest and
+player architecture are unchanged. No new custom action, icon asset, package,
+permission or player is introduced. Notification Stop continues to pause/hide and
+preserve resumable song/queue/index/position; explicit controller.close() remains
+destructive. Home resume, interruption and collection behavior are unchanged.
+
+Regression: test/media_control_icons_test.dart captures all published control
+variants through paused restoration, playback, pause, hide and reopen. It requires
+standard actions, nonempty drawable/name icon references, existing app/package
+resources resolved through package_config.json, and explicit tools:keep entries.
+Checking only nonempty strings would have missed this crash. Dart/static tests do
+not prove a resource ID in a newly packaged APK, so physical Android re-test is
+still required after a separately requested build: startup without the error,
+play/background/lock-screen controls, Stop -> Home resume at saved position.
+
+Validation: dart format lib test (53 files), flutter analyze clean, full flutter
+test 171 pass. One new test; one AudioPlayer and one AudioService.init remain.
+No APK build or flutter clean. All prior changelog entries preserved.
+
+Resource retention follows [Android tools:keep guidance](https://developer.android.com/topic/performance/app-optimization/customize-which-resources-to-keep).
+
+### Startup mini-player visibility and shared transport controls (2026-09-26)
+
+The user now confirms that Android background media notifications work on a physical
+device after the transport-icon keep fix. This is user-reported verification of that
+fix, not a claim that this agent performed device testing or the entire device
+checklist passed. Notification/service configuration and retained icon resources
+are unchanged by this UI update.
+
+Root cause: restored paused playback supplied a current song while the controller's
+existing hidden flag was false, so the shell displayed the mini-player immediately.
+PlaybackController now suppresses only startup mini-player presentation via
+miniPlayerVisible. The resumable song/source, queue/index, position-zero preload,
+Home canResume and system-session state remain intact. Explicit play/resume clears
+the startup suppression; selecting/loading a new track does likewise. No player,
+restoration coordinator or playback state machine was added. Startup does not
+reload, autoplay or write history; Home Play uses the already prepared source.
+
+The single shell mini-player adds Previous/Next calling the existing controller
+methods. Queue.canNext/canPrevious expose nonmutating manual-operation availability,
+forwarded by controller getters. Sequential/Repeat One manual Next disables at the
+end; shuffle and Repeat All retain their existing behavior. Previous remains
+available for a nonempty queue because the existing policy restarts even the first
+track, with the greater-than-three-second rule unchanged. No widget queue logic or
+shuffle RNG/history manipulation is introduced.
+
+Artwork/title/artist use their own tap region to open Now Playing. Controls and seek
+are outside it. At header widths below 400px, song information and four 48px controls
+use two rows; wider layouts use one row. Both text lines ellipsize, artwork is 40px,
+and colors come from the current theme. All shell tabs/child routes share this bar.
+X still pauses/hides and preserves the song, position, queue/index and mode; explicit
+controller.close() remains destructive. Handler/player streams keep controls and
+metadata synchronized; a live session is not hidden by returning to the UI.
+
+Validation: 9 new tests; all 180 tests pass; flutter analyze clean; dart format lib
+test (54 files). Existing icon-retention, resume, background, startup and navigation
+tests are retained. New layout tests cover 280px width in all six themes. One
+AudioPlayer/AudioService.init remain. No APK build or flutter clean; this UI update
+has automated verification only and still benefits from physical-device UX checks.
 
 ## 5. Local Music
 
@@ -289,7 +455,7 @@ retain the shell and mini-player, including when switching tabs mid-navigation. 
 | Playlists | IMPLEMENTED (V1) | Newest-created list, available counts, create/name validation, details, rename and confirmed deletion |
 | Playlist Details / Add Songs | IMPLEMENTED (V1) | Insertion-ordered available songs, Play/Shuffle, multi-select search, remove, shared Favorites; no manual reorder |
 | Liked Songs | IMPLEMENTED | Available favorites, newest-liked first, shared playback queue, empty/unavailable/loading/error states |
-| Now Playing | IMPLEMENTED | Shared transport, seek, mode controls and favorite heart; decorative artwork |
+| Now Playing | IMPLEMENTED | Shared transport, seek, mode controls and favorite heart; current-song real artwork with fallback |
 | Settings | IMPLEMENTED | Theme and About navigation only |
 | Theme Settings | IMPLEMENTED | Six choices, previews, selected indicator and immediate application |
 | About | IMPLEMENTED | Identity, bundled version and Flutter licenses page |
@@ -330,7 +496,7 @@ show a snackbar. Search still uses the shared PlaybackController/PlaybackQueue.
   MediaStore field, descending. Ties use case-insensitive title, ID and path.
   Null, zero or negative dates are omitted; no dates are invented. Up to 10 songs
   appear, with an explanatory empty state when no valid dates exist.
-- Home uses theme-aware horizontal song cards with existing fallback artwork. It
+- Home uses theme-aware horizontal song cards with real song artwork with themed fallback. It
   listens to library, history and controller changes, not position ticks. One
   shared discovery load feeds both sections; there is no scanning or polling.
 - Empty-library, permission denial, query failure/retry and empty-history states
@@ -434,7 +600,7 @@ show a snackbar. Search still uses the shared PlaybackController/PlaybackQueue.
 - Playlists remain newest-created first by persisted list order. Song additions
   append in selection order with deduplication by song key. Re-adding existing
   songs is a no-op; removal affects only that playlist. No drag/reorder UI exists.
-- Add Songs uses the shared library with title/artist/fallback artwork and checkboxes;
+- Add Songs uses the shared library with title/artist/real artwork with fallback and checkboxes;
   multi-selection survives search, which reuses in-memory relevance ranking. No
   MediaStore query runs per keystroke. Already-present songs remain checked and
   disabled. Shared song overflow menus offer Add to playlist, including creation
@@ -475,7 +641,7 @@ highlight, text, secondaryText and muted semantic colors, accessed through
 `context.palette`. `MelodifyTheme.forId` configures Material 3 components and text.
 Light uses light brightness/dark text. AMOLED uses a true-black scaffold background
 but dark-gray card/elevated surfaces. Decorative artwork gradients remain
-separate from the page palette; artwork is placeholder iconography.
+separate from the page palette for fallback only; real album artwork is not tinted.
 
 ## 8. Settings and About
 
@@ -576,9 +742,15 @@ dependencies; Melodify collection persistence remains SharedPreferences. `pubspe
 | `test/startup_playback_restoration_test.dart` | 20 tests: paused queue/index/source, Home Play/history hook, missing and stale files, empty/all-failed history, active-queue preservation, four modes, both readiness orders, permission retry, selection/Close races, persisted restart, next/previous and one-player construction guard |
 | `test/background_playback_test.dart` | 33 tests: shared player/state/control projection, queue/index/modes, previous threshold, startup/Close races, history isolation, interruptions/noisy events, late resume suppression, missing files/artwork, bounded artwork cache, lifecycle/remount, playlist/favorites queues and static native contract |
 | `test/playback_runtime_test.dart` | 1 native-channel contract test: concurrent startup registers once, shares player and does not autoplay |
+| `test/resumable_playback_test.dart` | 13 tests: all-mode Close/resume track/index/position/history, metadata republishing, clear, missing files, Close/resume race, hidden completion, idle session guard, real mini-player/Home widget flow and channel-settings behavior |
+| `test/media_notification_bridge_test.dart` | 1 mocked native-channel contract test: playing state, metadata, four controls, queue, Stop and reopen publication |
+| `test/media_control_icons_test.dart` | 1 regression: captures restored/playing/paused/hidden/reopened controls, requires standard actions, drawable references, resource existence and explicit shrinker retention for every published icon |
+| `test/mini_player_test.dart` | 9 tests: hidden startup across tabs, retained Home resume without reload, shared controls/delegation/three-second Previous, notification sync, information-only navigation, nondestructive X, queue availability and 280px layout/theme checks for all six themes |
 | `test/widget_test.dart` | 1 widget test: About opens Flutter LicensePage; not a full app smoke test |
 
-Latest `flutter test` result: **PASS — all 156 tests passed**, exit code 0 (2026-09-26).
+| `test/local_artwork_test.dart` | 21 tests: real/missing/failed/corrupt/oversized artwork, coalescing, LRU byte/entry bounds, concurrency/backlog bounds, theme stability, stale results, playlist covers, lazy lists, all song surfaces, current-track player artwork and cached Search |
+
+Latest `flutter test` result: **PASS — all 201 tests passed**, exit code 0 (2026-09-26).
 Search and Home tests use the real PlaybackController/PlaybackQueue with fake
 audio/query backends; SharedPreferences persistence is tested with its mock store. Full-shell Back routing is tested with mocked platform channels. Native playback/permission dialogs, device integration and
 native background lifecycle are not covered; simulated widget background/remount is covered. Source/play errors and completion are tested;
@@ -592,9 +764,9 @@ Latest `flutter analyze` result: **PASS — No issues found**, exit code 0 (2026
 No analyzer errors, warnings or informational issues were reported.
 `analysis_options.yaml` includes Flutter lints and excludes `build/**` plus all
 platform directories. Analysis success does not validate native Android builds.
-Requested `dart format lib test` result: **49 files formatted**, exit
+Requested `dart format lib test` result: **57 files formatted**, exit
 code 0 (2026-09-26). SDK commands required execution outside the restricted sandbox;
-the completed checks above used that access. Background playback implementation and tests changed
+the completed checks above used that access. Local artwork implementation and tests changed
 in this update; existing tests were preserved.
 
 ## 13. Build Status
@@ -636,18 +808,17 @@ were not verified in this update.
 - [ ] Persistent library/playback state.
 - [x] Background audio service, notification/lock-screen transport and metadata integration (device verification pending).
 - [x] Bounded embedded artwork thumbnails for the media session.
-- [ ] Embedded artwork in the Flutter song/Now Playing UI.
+- [x] Real MediaStore artwork throughout song-based Flutter UI, with bounded lazy loading and fallback.
 
 ## 15. Pending / Planned Features
 
 **PARTIALLY IMPLEMENTED:** Library has working Local Music/Liked Songs/Playlists/Settings links but
 inactive Songs/Favorites filter chips and history affordance; real history is currently
-available on Home. Artwork is
-decorative rather than metadata-driven.
+available on Home. Song artwork is metadata-driven with a themed fallback.
 
 **PLANNED / recommended backlog, not implemented or committed to a schedule:**
 Library history navigation, playlist manual ordering/import/export, library refresh,
-in-app embedded artwork, exact queue/position/mode persistence, device verification and release
+exact queue/position/mode persistence, device verification and release
 packaging. These are recommendations based on gaps; no separate roadmap was found.
 
 ## 16. Known Issues / Technical Debt
@@ -709,6 +880,55 @@ or native platform configuration were changed.
 - Never commit credentials, signing secrets or private machine configuration.
 - Review this document for every behavior/configuration/dependency change and append
   dated history without rewriting previous entries.
+
+### Real local-song artwork (2026-09-26)
+
+`LocalArtworkRepository.shared` uses the installed `on_audio_query_pluse` 3.0.7
+`queryArtwork(song.id, ArtworkType.AUDIO, format: JPEG, quality: 70)` API. It
+reuses MediaStore identities from the discovered library; it performs no new song
+scan, filesystem traversal, or audio-file copying. No packages were added/updated.
+
+`LocalSongArtwork` supplies lazy, rounded images to mini-player, Now Playing,
+Home Recently Played/Added, Search, Local Music, Folder, Liked Songs, playlist
+song rows, Add Songs and playlist covers. Category-only Quick Access tiles retain
+icons. All song lists share the same row widget. Existing controller changes drive
+current-song artwork; no artwork-specific playback state or listeners are added.
+
+The memory LRU holds at most 128 entries / 8 MiB encoded bytes, keyed by MediaStore
+ID plus existing path/URI identity and size bucket. Missing/failed results are
+cached too. Identical requests coalesce, with two active queries/validations and
+at most 128 pending jobs during fast scrolling. Nothing preloads the full library.
+Empty, invalid or over-512-KiB payloads fall back safely. Decoder images/codecs are
+disposed. Flutter's bounded image cache handles rendered thumbnails.
+
+Rows request 128/256-pixel buckets for their 40-64 logical-pixel boxes, accounting
+for display density and capped at 256. Now Playing uses a 220 logical-pixel box
+with requests capped at 512. ResizeImagePolicy.fit preserves aspect ratio while
+bounding decode dimensions; BoxFit.cover crops without stretching. Real artwork
+is not recolored. Waiting/error/missing states use the same-sized themed
+MusicArtwork fallback. Identity-keyed futures discard previous-track images.
+
+Playlist covers inspect currently available members in playlist order, sequentially,
+until the first valid cover. They stop after success or widget replacement/unmount.
+Empty/all-missing playlists retain the existing playlist fallback. A visible
+playlist whose members all lack artwork can require many small sequential queries;
+these remain subject to the shared bounds and negative cache.
+
+System MediaArtwork shares the repository at 256 pixels and retains its existing
+16-slot temporary-file cache and independently bounded 16-entry URI index (safe
+when the OS deletes temporary files). Its cache key now also includes path/URI identity,
+preventing an ID reused for another file from returning that file's old cover.
+The handler's late-result guard and optional artUri behavior are unchanged.
+Transport controls, Android configuration and keep.xml icon retention are preserved.
+Exactly one AudioPlayer and one AudioService.init remain in playback_runtime.dart.
+
+Verification: 21 new tests, 201 total passing; flutter analyze clean; dart format
+lib test covers 57 files; git diff --check passes. Existing narrow mini-player
+checks across all six themes and Android icon-retention regression still pass.
+No APK build or flutter clean. No physical-device artwork verification performed.
+Artwork availability depends on the plugin/platform and file metadata. Evicted
+or process-restarted cache entries may be queried again; artwork edited in place
+can remain cached for the session. No custom covers or persistent artwork index.
 
 ## 18. Project Change Log
 
@@ -920,6 +1140,85 @@ or native platform configuration were changed.
 - Exactly one production AudioPlayer constructor and one AudioService.init remain.
 - No flutter clean or APK build. Physical Android/iOS verification is pending.
 
+### 2026-09-26 - Resumable player Close and notification lifecycle fixes
+
+**Fixed**
+- Mini-player Close no longer destroys Home's resumable track. Hide pauses and
+  retains queue/index/mode/position; Home Play revalidates and seeks before resume.
+- AudioHandler Stop/dismissal uses the same nondestructive Close semantics;
+  explicit controller.close() remains destructive. Reopening avoids an extra
+  history write, and missing files invalidate resume safely.
+- Backend idle no longer inadvertently ends a retained media session; reopening
+  republishes native queue/metadata. Added underlying service error diagnostics.
+
+**Added**
+- Read-only Android channel-block inspection and user-initiated notification
+  settings action; no POST_NOTIFICATIONS prompt for exempt media notifications.
+- 14 focused unit/widget/native-channel contract tests. Native test cache paths are mocked and disposed
+  so asynchronous plugin setup cannot leak failures. Existing tests retained,
+  with notification-dismissal assertions updated for the requested new semantics.
+
+**Verification**
+- dart format lib test (52 files), flutter analyze clean, full flutter test 170 pass,
+  diff/static ownership checks passed. One AudioPlayer and one AudioService.init.
+- No dependencies changed, APK built or flutter clean run. Device-specific missing
+  notification root cause and physical behavior remain unverified; current-state
+  documentation records the evidence and diagnostic follow-up without claiming a
+  confirmed device fix. All earlier changelog entries are preserved.
+
+### 2026-09-26 - Confirmed Android CustomAction Stop icon crash
+
+**Fixed**
+- Retain audio_service_stop, skip_previous, play_arrow, pause and skip_next in
+  res/raw/keep.xml alongside ic_stat_music. The previous keep rule protected only
+  the notification status icon; the existing release report marks action icons
+  unreachable. Android 13+ turns standard Stop into a CustomAction, which rejects
+  its stripped icon's zero resource ID.
+- Standard controls and resumable notification Stop/mini-player Close are retained;
+  no playback redesign, new player/service, custom action or permission added.
+
+**Added / verified**
+- One regression test verifies all published standard controls' icon references,
+  resource existence and shrinker retention across restored/play/pause/hide/resume.
+- dart format lib test (53 files); flutter analyze clean; flutter test 171 passing;
+  XML/diff/static ownership checks passed. Exactly one AudioPlayer/AudioService.init.
+- Root cause is confirmed by user-supplied device log plus existing shrinker output.
+  Physical Android re-test of the fix is still required. No APK build/flutter clean.
+
+### 2026-09-26 - Hidden startup mini-player and shared Previous/Next
+
+**Changed**
+- Startup-restored paused songs remain internally resumable while miniPlayerVisible
+  suppresses the bar until explicit playback/resume. Home Play reveals the prepared
+  track without reloading. Session/notification state and restoration are preserved.
+- Shared mini-player adds controller-delegated Previous/Next with queue-owned
+  availability. Information-only navigation, theme colors, ellipsis and responsive
+  one/two-row layout preserve all four controls and nondestructive X.
+
+**Verified**
+- 9 new tests; 180 total passing; flutter analyze clean; dart format lib test (54
+  files); diff/static ownership checks passed. Existing icon regression preserved.
+- User reports physical Android notification working after icon retention fix.
+  This task leaves notification configuration/resources unchanged and does not
+  claim additional physical testing. No APK build or flutter clean.
+- One AudioPlayer and one AudioService.init; prior changelog entries preserved.
+
+### 2026-09-26 - Real local-song artwork throughout Melodify
+
+**Added / changed**
+- Shared lazy MediaStore artwork repository and reusable LocalSongArtwork with
+  same-sized themed fallback, bounded thumbnails/cache/concurrency and stale-result
+  protection. Wired every song-based surface, including playlist cover selection.
+- Reused the resolver for system artwork; strengthened its cache identity to
+  include path/URI as well as MediaStore ID. Android icon retention is preserved.
+- No dependency, player ownership, service initialization or playback-policy changes.
+
+**Verified**
+- 21 new focused tests; all 201 tests pass; flutter analyze reports no issues;
+  dart format lib test (57 files); diff/static ownership checks pass.
+- Exactly one AudioPlayer and one AudioService.init remain. No APK build,
+  flutter clean or physical-device artwork verification. Prior entries preserved.
+
 ## 19. Next Recommended Work
 
 1. Extend PlaybackController coverage beyond startup races to rapid seek/completion/
@@ -933,7 +1232,7 @@ or native platform configuration were changed.
    Android devices; consider manual playlist ordering and import/export afterward.
 6. Physically verify Background Playback V1 using the checklist above, especially
    OEM task-removal, paused foreground sessions and focus/route behavior.
-7. Add library refresh and embedded artwork; prepare production identity/signing
+7. Verify real artwork on Android devices; prepare production identity/signing
    and verify a fresh release build when release work is requested.
 
 These remaining recommendations require follow-up beyond the Background Playback V1 implementation.

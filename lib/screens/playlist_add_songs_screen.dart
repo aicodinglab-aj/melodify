@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../library/local_music_library.dart';
 import '../library/playlists.dart';
-import '../widgets/music_artwork.dart';
+import '../widgets/local_song_artwork.dart';
 import '../widgets/playlist_dialogs.dart';
 import '../widgets/playlist_library_state.dart';
 
@@ -119,7 +119,7 @@ class _PlaylistAddSongsScreenState extends State<PlaylistAddSongsScreen> {
                                 ? 'Local Music'
                                 : artist;
                             return CheckboxListTile(
-                              secondary: const MusicArtwork(),
+                              secondary: LocalSongArtwork(song: song),
                               title: Text(
                                 song.title,
                                 maxLines: 1,

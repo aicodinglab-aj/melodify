@@ -1,5 +1,6 @@
 import 'dart:io';
-import 'dart:ui' as ui;
+
+import '../library/local_artwork_repository.dart';
 
 import 'package:on_audio_query_pluse/on_audio_query.dart';
 import 'package:path_provider/path_provider.dart';
@@ -8,12 +9,14 @@ import 'package:path_provider/path_provider.dart';
 /// copied. Sixteen disk slots bound cache size across process restarts too.
 class MediaArtwork {
   MediaArtwork({OnAudioQuery? query, Future<Directory> Function()? directory})
-    : _query = query ?? OnAudioQuery(),
+    : _artwork = query == null
+          ? LocalArtworkRepository.shared
+          : LocalArtworkRepository(query: query),
       _directory = directory ?? getTemporaryDirectory;
 
-  final OnAudioQuery _query;
+  final LocalArtworkRepository _artwork;
   final Future<Directory> Function() _directory;
-  final Map<int, Uri> _cache = {};
+  final Map<String, Uri> _cache = {};
   Future<void> _work = Future.value();
   int _slot = 0;
 
@@ -26,29 +29,11 @@ class MediaArtwork {
 
   Future<Uri?> _resolve(SongModel song) async {
     try {
-      final cached = _cache[song.id];
+      final key = LocalArtworkRepository.key(song, 256);
+      final cached = _cache[key];
       if (cached != null && await File.fromUri(cached).exists()) return cached;
-      final bytes = await _query.queryArtwork(
-        song.id,
-        ArtworkType.AUDIO,
-        format: ArtworkFormat.JPEG,
-        size: 256,
-        quality: 70,
-      );
-      if (bytes == null || bytes.isEmpty || bytes.length > 512 * 1024) {
-        return null;
-      }
-      final codec = await ui.instantiateImageCodec(
-        bytes,
-        targetWidth: 256,
-        targetHeight: 256,
-      );
-      try {
-        final frame = await codec.getNextFrame();
-        frame.image.dispose();
-      } finally {
-        codec.dispose();
-      }
+      final bytes = await _artwork.load(song, pixels: 256);
+      if (bytes == null) return null;
       final root = await _directory();
       final directory = Directory('${root.path}/melodify_media_artwork');
       await directory.create(recursive: true);
@@ -64,7 +49,12 @@ class MediaArtwork {
       );
       await file.writeAsBytes(bytes, flush: true);
       final uri = file.uri;
-      _cache[song.id] = uri;
+      _cache[key] = uri;
+      // Temporary files may be removed by the OS between lookups, so bound the
+      // index independently of the slot-file eviction above.
+      while (_cache.length > 16) {
+        _cache.remove(_cache.keys.first);
+      }
       return uri;
     } catch (_) {
       return null;

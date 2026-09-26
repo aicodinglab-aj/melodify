@@ -15,7 +15,7 @@ import 'screens/now_playing_screen.dart';
 import 'screens/search_screen.dart';
 import 'theme/melodify_theme.dart';
 import 'theme/melodify_theme_controller.dart';
-import 'widgets/music_artwork.dart';
+import 'widgets/local_song_artwork.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -79,7 +79,7 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int currentIndex = 0;
   AudioPlayer get _audioPlayer => _controller.player;
   PlaybackController get _controller => widget.runtime.controller;
@@ -91,9 +91,24 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    widget.runtime.notifications.refresh();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) widget.runtime.start();
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      widget.runtime.notifications.refresh();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
   final _homeNavigatorKey = GlobalKey<NavigatorState>();
@@ -151,131 +166,158 @@ class _MainScreenState extends State<MainScreen> {
     return '$minutes:$seconds';
   }
 
-  Widget _buildMiniPlayer() {
-    return StreamBuilder<Duration?>(
-      stream: _audioPlayer.durationStream,
-      initialData: _audioPlayer.duration,
-      builder: (context, durationSnapshot) {
-        final duration = durationSnapshot.data;
-
-        return StreamBuilder<Duration>(
-          stream: _audioPlayer.positionStream,
-          initialData: _audioPlayer.position,
-          builder: (context, positionSnapshot) {
-            final position = positionSnapshot.data ?? Duration.zero;
-            final durationInMilliseconds = duration?.inMilliseconds ?? 0;
-            final sliderPosition = durationInMilliseconds > 0
-                ? position.inMilliseconds.clamp(0, durationInMilliseconds)
-                : 0;
-
-            return GestureDetector(
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => NowPlayingScreen(
-                    controller: _controller,
-                    favorites: _favorites,
+  Widget _miniPlayerHeader() => LayoutBuilder(
+    builder: (context, constraints) {
+      final information = InkWell(
+        key: const ValueKey('mini-player-information'),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => NowPlayingScreen(
+              controller: _controller,
+              favorites: _favorites,
+            ),
+          ),
+        ),
+        child: Row(
+          children: [
+            LocalSongArtwork(
+              song: _controller.currentSong,
+              active: true,
+              size: 40,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _controller.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium,
                   ),
-                ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _controller.artist,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
               ),
-              child: Container(
-                margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                decoration: BoxDecoration(
-                  color: context.palette.elevated,
-                  borderRadius: BorderRadius.circular(20),
+            ),
+          ],
+        ),
+      );
+      final controls = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            onPressed: _controller.canGoPrevious ? _controller.previous : null,
+            tooltip: 'Previous',
+            icon: const Icon(Icons.skip_previous_rounded),
+          ),
+          StreamBuilder<bool>(
+            stream: _audioPlayer.playingStream,
+            initialData: _audioPlayer.playing,
+            builder: (context, snapshot) {
+              final playing = snapshot.data ?? false;
+              return IconButton.filled(
+                onPressed: _controller.togglePlayback,
+                tooltip: playing ? 'Pause' : 'Play',
+                style: IconButton.styleFrom(
+                  backgroundColor: context.palette.primary,
+                  foregroundColor: context.palette.background,
+                  minimumSize: const Size(48, 48),
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      children: [
-                        const MusicArtwork(active: true),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                _controller.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.titleMedium,
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                _controller.artist,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        StreamBuilder<bool>(
-                          stream: _audioPlayer.playingStream,
-                          initialData: _audioPlayer.playing,
-                          builder: (context, snapshot) {
-                            final isPlaying = snapshot.data ?? false;
-                            return IconButton.filled(
-                              onPressed: _controller.togglePlayback,
-                              tooltip: isPlaying ? 'Pause' : 'Play',
-                              style: IconButton.styleFrom(
-                                backgroundColor: context.palette.primary,
-                                foregroundColor: context.palette.background,
-                                minimumSize: const Size(48, 48),
-                              ),
-                              icon: Icon(
-                                isPlaying
-                                    ? Icons.pause_rounded
-                                    : Icons.play_arrow_rounded,
-                              ),
-                            );
-                          },
-                        ),
-                        IconButton(
-                          onPressed: _controller.close,
-                          tooltip: 'Close player',
-                          icon: const Icon(Icons.close_rounded),
-                        ),
-                      ],
-                    ),
-                    Slider(
-                      min: 0,
-                      max: durationInMilliseconds > 0
-                          ? durationInMilliseconds.toDouble()
-                          : 1,
-                      value: sliderPosition.toDouble(),
-                      label: _formatDuration(position),
-                      semanticFormatterCallback: (value) => _formatDuration(
+                icon: Icon(
+                  playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                ),
+              );
+            },
+          ),
+          IconButton(
+            onPressed: _controller.canGoNext ? _controller.next : null,
+            tooltip: 'Next',
+            icon: const Icon(Icons.skip_next_rounded),
+          ),
+          IconButton(
+            onPressed: _controller.hidePlayer,
+            tooltip: 'Close player',
+            icon: const Icon(Icons.close_rounded),
+          ),
+        ],
+      );
+      if (constraints.maxWidth < 400) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            information,
+            Align(alignment: Alignment.centerRight, child: controls),
+          ],
+        );
+      }
+      return Row(
+        children: [
+          Expanded(child: information),
+          const SizedBox(width: 8),
+          controls,
+        ],
+      );
+    },
+  );
+
+  Widget _buildMiniPlayer() => StreamBuilder<Duration?>(
+    stream: _audioPlayer.durationStream,
+    initialData: _audioPlayer.duration,
+    builder: (context, durationSnapshot) => StreamBuilder<Duration>(
+      stream: _audioPlayer.positionStream,
+      initialData: _audioPlayer.position,
+      builder: (context, positionSnapshot) {
+        final duration = durationSnapshot.data;
+        final position = positionSnapshot.data ?? Duration.zero;
+        final maximum = duration?.inMilliseconds ?? 0;
+        return Container(
+          key: const ValueKey('shared-mini-player'),
+          margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          decoration: BoxDecoration(
+            color: context.palette.elevated,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _miniPlayerHeader(),
+              Slider(
+                min: 0,
+                max: maximum > 0 ? maximum.toDouble() : 1,
+                value: maximum > 0
+                    ? position.inMilliseconds.clamp(0, maximum).toDouble()
+                    : 0,
+                label: _formatDuration(position),
+                semanticFormatterCallback: (value) =>
+                    _formatDuration(Duration(milliseconds: value.round())),
+                onChanged: maximum > 0
+                    ? (value) => _controller.seek(
                         Duration(milliseconds: value.round()),
-                      ),
-                      onChanged: durationInMilliseconds > 0
-                          ? (value) {
-                              _controller.seek(
-                                Duration(milliseconds: value.round()),
-                              );
-                            }
-                          : null,
-                    ),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: Text(
-                        '${_formatDuration(position)} / '
-                        '${duration == null ? '--:--' : _formatDuration(duration)}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ),
-                  ],
+                      )
+                    : null,
+              ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  '${_formatDuration(position)} / ${duration == null ? '--:--' : _formatDuration(duration)}',
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
-            );
-          },
+            ],
+          ),
         );
       },
-    );
-  }
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -314,7 +356,18 @@ class _MainScreenState extends State<MainScreen> {
                       child: Text(issue),
                     ),
             ),
-            if (_controller.currentSong != null) _buildMiniPlayer(),
+            ValueListenableBuilder<bool>(
+              valueListenable: widget.runtime.notifications.blocked,
+              builder: (context, blocked, _) => blocked
+                  ? TextButton(
+                      onPressed: widget.runtime.notifications.open,
+                      child: const Text(
+                        'Music playback notifications are disabled. Open settings',
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+            if (_controller.miniPlayerVisible) _buildMiniPlayer(),
             NavigationBar(
               selectedIndex: currentIndex,
               onDestinationSelected: (index) {

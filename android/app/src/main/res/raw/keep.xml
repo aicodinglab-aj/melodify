@@ -1,1 +1,5 @@
-<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@drawable/ic_stat_music" />
+<!-- audio_service resolves these names from Dart via Resources.getIdentifier.
+     On Android 13+, standard Stop becomes a CustomAction requiring a nonzero
+     icon ID. Keep the transport icons as well as the notification status icon. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_stat_music,@drawable/audio_service_skip_previous,@drawable/audio_service_play_arrow,@drawable/audio_service_pause,@drawable/audio_service_skip_next,@drawable/audio_service_stop" />
